@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.2.4
+
+### Fixed
+
+- Fixed the New Branch dialog flow so accepting the dialog reliably creates and switches branches.
+- Replaced the mnemonic label `Create & Switch` with the clearer `Create and Switch`.
+- Refresh branch UI only after Git confirms the active branch.
+- Added clear errors for invalid, duplicate, or missing local branch names.
+
+### Added
+
+- Git branch-name validation through `git check-ref-format --branch`.
+- Post-create and post-switch branch verification.
+- Branch workflow logging and status-bar feedback.
+- Automated regression tests for create/switch branch workflows.
+
 ## v0.2.3
 
 ### Fixed

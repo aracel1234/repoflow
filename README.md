@@ -2,7 +2,8 @@
 
 RepoFlow is a lightweight desktop Git and GitHub client designed for Linux, with KDE-friendly installation and a workflow focused on everyday repository tasks without requiring terminal commands.
 
-> Current development version: **v0.2.3**
+> Current development version: **v0.2.4**
+> v0.2.4 fixes and verifies local branch creation/switching while retaining the v0.2.3 partial-staging model.
 
 RepoFlow is currently under active development. The project is being tested incrementally before a stable release is published.
 

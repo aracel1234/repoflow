@@ -105,17 +105,46 @@ class BranchDialog(QDialog):
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.setWindowTitle("Create Branch")
+        self.setMinimumWidth(420)
+
         self.name_edit = QLineEdit()
         self.name_edit.setPlaceholderText("feature/my-change")
+
+        note = QLabel(
+            "Create a new local branch from the current commit and switch to it immediately."
+        )
+        note.setObjectName("muted")
+        note.setWordWrap(True)
+
         form = QFormLayout()
         form.addRow("Branch name", self.name_edit)
-        buttons = QDialogButtonBox(QDialogButtonBox.Cancel | QDialogButtonBox.Ok)
-        buttons.button(QDialogButtonBox.Ok).setText("Create & Switch")
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
+
+        buttons = QDialogButtonBox()
+        self.cancel_button = buttons.addButton("Cancel", QDialogButtonBox.ButtonRole.RejectRole)
+        self.create_button = buttons.addButton(
+            "Create and Switch",
+            QDialogButtonBox.ButtonRole.AcceptRole,
+        )
+        self.create_button.setDefault(True)
+        self.create_button.setEnabled(False)
+
+        self.name_edit.textChanged.connect(
+            lambda value: self.create_button.setEnabled(bool(value.strip()))
+        )
+        self.name_edit.returnPressed.connect(self._submit)
+        self.create_button.clicked.connect(self._submit)
+        self.cancel_button.clicked.connect(self.reject)
+
         layout = QVBoxLayout(self)
+        layout.addWidget(note)
         layout.addLayout(form)
         layout.addWidget(buttons)
+
+        self.name_edit.setFocus()
+
+    def _submit(self) -> None:
+        if self.name():
+            self.accept()
 
     def name(self) -> str:
         return self.name_edit.text().strip()

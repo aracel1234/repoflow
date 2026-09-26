@@ -7,6 +7,7 @@ from PySide6.QtCore import Qt, QSignalBlocker, QThreadPool, QTimer, QUrl
 from PySide6.QtGui import QAction, QDesktopServices
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QDialog,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -843,19 +844,42 @@ class MainWindow(QMainWindow):
             return
         if chosen == new_action:
             dialog = BranchDialog(self)
-            if dialog.exec() == dialog.Accepted and dialog.name():
-                try:
-                    self.git.create_branch(dialog.name(), switch=True)
-                    self.refresh_all()
-                except GitError as exc:
-                    self._error(str(exc))
+            result = dialog.exec()
+            if result != QDialog.DialogCode.Accepted:
+                return
+
+            branch_name = dialog.name()
+            if not branch_name:
+                self._error("Branch name cannot be empty.")
+                return
+
+            try:
+                logger.info("Creating and switching branch name=%r", branch_name)
+                self.git.create_branch(branch_name, switch=True)
+                active = self.git.branch()
+                logger.info("Branch created successfully active=%r", active)
+                self.statusBar().showMessage(
+                    f"Created and switched to branch '{active}'.",
+                    5000,
+                )
+                QTimer.singleShot(0, self.refresh_all)
+            except GitError as exc:
+                logger.exception("Could not create branch name=%r", branch_name)
+                self._error(str(exc))
         else:
             branch = chosen.data()
             if branch and branch != info.branch:
                 try:
+                    logger.info("Switching branch from=%r to=%r", info.branch, branch)
                     self.git.switch_branch(branch)
-                    self.refresh_all()
+                    active = self.git.branch()
+                    self.statusBar().showMessage(
+                        f"Switched to branch '{active}'.",
+                        5000,
+                    )
+                    QTimer.singleShot(0, self.refresh_all)
                 except GitError as exc:
+                    logger.exception("Could not switch branch to=%r", branch)
                     self._error(str(exc))
 
     def _populate_history(self) -> None:

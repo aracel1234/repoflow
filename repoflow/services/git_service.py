@@ -354,14 +354,36 @@ esac
         out = self._run(["for-each-ref", "--format=%(refname:short)", "refs/heads/"]).stdout
         return [x.strip() for x in out.splitlines() if x.strip()]
 
-    def create_branch(self, name: str, *, switch: bool = True) -> None:
+    def validate_branch_name(self, name: str) -> str:
         name = name.strip()
         if not name:
             raise GitError("Branch name cannot be empty.")
+        result = self._run(["check-ref-format", "--branch", name], check=False)
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout).strip()
+            raise GitError(detail or f"Invalid branch name: {name}")
+        return name
+
+    def create_branch(self, name: str, *, switch: bool = True) -> None:
+        name = self.validate_branch_name(name)
+        if name in self.local_branches():
+            raise GitError(f"Branch '{name}' already exists.")
+
         if switch:
             self._run(["switch", "-c", name])
+            active = self.branch()
+            if active != name:
+                raise GitError(
+                    f"Git created the branch but RepoFlow could not switch to it. Active branch: {active}"
+                )
         else:
             self._run(["branch", name])
 
     def switch_branch(self, name: str) -> None:
+        name = self.validate_branch_name(name)
+        if name not in self.local_branches():
+            raise GitError(f"Local branch '{name}' does not exist.")
         self._run(["switch", name])
+        active = self.branch()
+        if active != name:
+            raise GitError(f"Could not switch to branch '{name}'. Active branch: {active}")

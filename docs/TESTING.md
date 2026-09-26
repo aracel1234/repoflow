@@ -76,3 +76,21 @@ After T01-T19 pass, continue with:
 - network failure handling
 - token leakage checks
 - full restart smoke test
+
+## T18-T19 branch regression (v0.2.4)
+
+### T18 — Create and switch branch
+
+1. Start on `main`.
+2. Click the branch button, then `+ New Branch`.
+3. Enter `feature/qa-test`.
+4. Click `Create and Switch`.
+5. PASS when the header changes to `feature/qa-test`, the status bar confirms the switch, and the branch menu lists both `main` and `feature/qa-test`.
+
+### T19 — Switch between existing branches
+
+1. From `feature/qa-test`, open the branch menu and choose `main`.
+2. PASS when the header changes to `main`.
+3. Switch back to `feature/qa-test`, then finally return to `main`.
+4. PASS when every switch updates both the header and checked branch menu entry.
+
