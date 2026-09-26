@@ -4,7 +4,7 @@ from pathlib import Path
 import logging
 
 from PySide6.QtCore import Qt, QSignalBlocker, QThreadPool, QTimer, QUrl
-from PySide6.QtGui import QAction, QDesktopServices
+from PySide6.QtGui import QAction, QDesktopServices, QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QDialog,
@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
     QSplitter,
     QTabWidget,
@@ -55,8 +56,8 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("RepoFlow")
-        self.resize(1320, 800)
-        self.setMinimumSize(1020, 640)
+        self.resize(1380, 840)
+        self.setMinimumSize(1060, 660)
 
         self.settings = AppSettings()
         self.credentials = CredentialService()
@@ -92,15 +93,29 @@ class MainWindow(QMainWindow):
 
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(265)
+        sidebar.setFixedWidth(282)
         side_layout = QVBoxLayout(sidebar)
         side_layout.setContentsMargins(16, 18, 16, 16)
         side_layout.setSpacing(10)
 
+        brand_row = QHBoxLayout()
+        brand_row.setSpacing(10)
+        brand_icon = QLabel()
+        brand_icon.setObjectName("brandIcon")
+        icon_path = Path(__file__).resolve().parents[2] / "assets" / "repoflow.svg"
+        if icon_path.exists():
+            brand_icon.setPixmap(QIcon(str(icon_path)).pixmap(40, 40))
+        brand_icon.setFixedSize(42, 42)
+        brand_text = QVBoxLayout()
+        brand_text.setSpacing(0)
         brand = QLabel("RepoFlow")
         brand.setObjectName("title")
         subtitle = QLabel("Git, without the terminal")
         subtitle.setObjectName("muted")
+        brand_text.addWidget(brand)
+        brand_text.addWidget(subtitle)
+        brand_row.addWidget(brand_icon)
+        brand_row.addLayout(brand_text, 1)
 
         self.repo_list = QListWidget()
         self.repo_list.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -112,8 +127,7 @@ class MainWindow(QMainWindow):
         self.github_account_button = QPushButton("Connect GitHub")
         self.github_account_button.clicked.connect(self.show_github_account)
 
-        side_layout.addWidget(brand)
-        side_layout.addWidget(subtitle)
+        side_layout.addLayout(brand_row)
         side_layout.addSpacing(8)
         side_layout.addWidget(QLabel("Repositories"))
         side_layout.addWidget(self.repo_list, 1)
@@ -122,7 +136,7 @@ class MainWindow(QMainWindow):
 
         content = QWidget()
         content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(18, 16, 18, 12)
+        content_layout.setContentsMargins(20, 18, 20, 14)
         content_layout.setSpacing(12)
 
         self.header = QFrame()
@@ -177,6 +191,14 @@ class MainWindow(QMainWindow):
         root.addWidget(sidebar)
         root.addWidget(content, 1)
         self.setCentralWidget(central)
+        self.activity_progress = QProgressBar()
+        self.activity_progress.setObjectName("activityProgress")
+        self.activity_progress.setRange(0, 0)
+        self.activity_progress.setTextVisible(False)
+        self.activity_progress.setFixedWidth(120)
+        self.activity_progress.setFixedHeight(10)
+        self.activity_progress.hide()
+        self.statusBar().addPermanentWidget(self.activity_progress)
         self.statusBar().showMessage("Ready")
 
     def _build_changes_tab(self) -> QWidget:
@@ -186,13 +208,13 @@ class MainWindow(QMainWindow):
         layout.setSpacing(10)
 
         self.sync_label = QLabel("Select a repository to view changes.")
-        self.sync_label.setObjectName("muted")
+        self.sync_label.setObjectName("syncBadge")
         self.stage_legend = QLabel("Checkbox: ☐ unstaged   ☑ staged   ◩ partially staged")
         self.stage_legend.setObjectName("muted")
 
         splitter = QSplitter(Qt.Horizontal)
         self.change_tree = QTreeWidget()
-        self.change_tree.setHeaderLabels(["Commit", "Status", "File"])
+        self.change_tree.setHeaderLabels(["Stage", "Status", "File"])
         self.change_tree.setColumnWidth(self.COL_CHECK, 70)
         self.change_tree.setColumnWidth(self.COL_STATUS, 190)
         self.change_tree.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -202,6 +224,7 @@ class MainWindow(QMainWindow):
         self.diff_view = QPlainTextEdit()
         self.diff_view.setReadOnly(True)
         self.diff_view.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self.diff_view.setObjectName("diffView")
         self.diff_view.setPlaceholderText("Select a file to inspect its changes.")
         splitter.addWidget(self.change_tree)
         splitter.addWidget(self.diff_view)
@@ -217,7 +240,7 @@ class MainWindow(QMainWindow):
         self.commit_button = QPushButton("Commit Staged")
         self.commit_button.setObjectName("primary")
         self.commit_button.clicked.connect(self.commit)
-        self.commit_push_button = QPushButton("Commit & Push")
+        self.commit_push_button = QPushButton("Commit and Push")
         self.commit_push_button.clicked.connect(lambda: self.commit(push_after=True))
         commit_layout.addWidget(self.commit_message, 1)
         commit_layout.addWidget(self.commit_button)
@@ -786,7 +809,7 @@ class MainWindow(QMainWindow):
         token, username = self._github_auth()
         self._run_background(
             lambda: self.git.fetch(token=token, username=username),
-            on_success=lambda msg: self._network_done(str(msg)),
+            on_success=lambda msg: self._network_done(str(msg), "Fetch"),
             busy="Fetching remote changes…",
         )
 
@@ -799,7 +822,7 @@ class MainWindow(QMainWindow):
             self.git.fetch(token=token, username=username)
             return self.git.pull_ff_only(token=token, username=username)
 
-        self._run_background(task, on_success=lambda msg: self._network_done(str(msg)), busy="Pulling changes…")
+        self._run_background(task, on_success=lambda msg: self._network_done(str(msg), "Pull"), busy="Pulling changes…")
 
     def push(self) -> None:
         if not self.git:
@@ -815,14 +838,25 @@ class MainWindow(QMainWindow):
         token, username = self._github_auth()
         self._run_background(
             lambda: self.git.push(token=token, username=username),
-            on_success=lambda msg: self._network_done(str(msg)),
+            on_success=lambda msg: self._network_done(str(msg), "Push"),
             busy="Pushing commits…",
         )
 
-    def _network_done(self, message: str) -> None:
+    def _network_done(self, message: str, operation: str = "Operation") -> None:
         self.refresh_all()
-        first_line = message.splitlines()[0] if message else "Done"
-        self.statusBar().showMessage(first_line, 6000)
+        normalized = (message or "").strip().lower()
+        if normalized.startswith("already up to date"):
+            friendly = "✓ Already up to date."
+        elif operation == "Fetch":
+            friendly = "✓ Fetch completed."
+        elif operation == "Pull":
+            friendly = "✓ Pull completed."
+        elif operation == "Push":
+            friendly = "✓ Push completed."
+        else:
+            first_line = message.splitlines()[0] if message else "Done"
+            friendly = f"✓ {first_line}"
+        self.statusBar().showMessage(friendly, 6500)
 
     def open_remote_in_browser(self) -> None:
         if not self.git:
@@ -934,7 +968,9 @@ class MainWindow(QMainWindow):
             (on_error or self._error)(message)
 
         def finished() -> None:
-            self._set_busy(False, "Ready")
+            # Do not overwrite the success/error message with "Ready" immediately.
+            # The result remains visible for its configured timeout.
+            self._set_busy(False, None)
             if worker in self._active_workers:
                 self._active_workers.remove(worker)
             logger.info("Background task finished label=%r active_workers=%d", busy, len(self._active_workers))
@@ -944,8 +980,10 @@ class MainWindow(QMainWindow):
         worker.signals.finished.connect(finished)
         self.pool.start(worker)
 
-    def _set_busy(self, busy: bool, message: str) -> None:
-        self.statusBar().showMessage(message)
+    def _set_busy(self, busy: bool, message: str | None) -> None:
+        if message is not None:
+            self.statusBar().showMessage(message)
+        self.activity_progress.setVisible(busy)
         for button in (self.refresh_button, self.fetch_button, self.pull_button, self.push_button):
             button.setEnabled(not busy and self.git is not None)
 

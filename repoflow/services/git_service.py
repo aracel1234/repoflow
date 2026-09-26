@@ -258,6 +258,47 @@ esac
         else:
             self._run(["rm", "--cached", "-r", "--ignore-unmatch", "--", *items], check=False)
 
+    @staticmethod
+    def _format_size(size: int) -> str:
+        value = float(size)
+        for unit in ("B", "KB", "MB", "GB"):
+            if value < 1024 or unit == "GB":
+                return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+            value /= 1024
+        return f"{size} B"
+
+    @staticmethod
+    def _looks_binary(data: bytes) -> bool:
+        if not data:
+            return False
+        if b"\x00" in data:
+            return True
+        sample = data[:8192]
+        try:
+            text = sample.decode("utf-8")
+        except UnicodeDecodeError:
+            return True
+        if not text:
+            return False
+        control = sum(1 for char in text if ord(char) < 32 and char not in "\n\r\t\f\b")
+        return (control / max(len(text), 1)) > 0.05
+
+    def _binary_preview(self, path: str, *, staged: bool) -> str:
+        absolute = Path(self.root()) / path
+        size_line = ""
+        try:
+            if absolute.is_file():
+                size_line = f"\nSize: {self._format_size(absolute.stat().st_size)}"
+        except OSError:
+            pass
+        state = "staged" if staged else "working-tree"
+        return (
+            "Binary file\n"
+            "Preview is not available for binary files.\n\n"
+            f"File: {path}\n"
+            f"State: {state}{size_line}"
+        )
+
     def diff(self, path: str, *, staged: bool = False) -> str:
         args = ["diff", "--no-ext-diff", "--no-color"]
         if staged:
@@ -265,18 +306,23 @@ esac
         args.extend(["--", path])
         result = self._run(args, check=False)
         text = result.stdout
+        if "Binary files " in text and " differ" in text:
+            return self._binary_preview(path, staged=staged)
         if not text and not staged:
             absolute = Path(self.root()) / path
             if absolute.is_file():
                 try:
-                    data = absolute.read_text(encoding="utf-8", errors="replace")
+                    raw = absolute.read_bytes()
+                    if self._looks_binary(raw):
+                        return self._binary_preview(path, staged=False)
+                    data = raw.decode("utf-8")
                     lines = data.splitlines()
                     preview = "\n".join(f"+ {line}" for line in lines[:500])
                     if len(lines) > 500:
                         preview += "\n… preview truncated …"
                     return preview
-                except OSError:
-                    return "Binary or unreadable file."
+                except (OSError, UnicodeDecodeError):
+                    return self._binary_preview(path, staged=False)
         return text or "No textual diff available."
 
     def staged_diff(self, path: str) -> str:

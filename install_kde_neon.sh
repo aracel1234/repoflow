@@ -49,8 +49,9 @@ if [ -z "${SYSTEM_PYTHON}" ] || [ ! -x "${SYSTEM_PYTHON}" ]; then
 fi
 
 mkdir -p "$APP_DIR" "$DESKTOP_DIR" "$BIN_DIR" "$STATE_DIR"
-rm -rf "$APP_DIR/repoflow"
+rm -rf "$APP_DIR/repoflow" "$APP_DIR/assets"
 cp -R "$SOURCE_DIR/repoflow" "$APP_DIR/"
+cp -R "$SOURCE_DIR/assets" "$APP_DIR/"
 find "$APP_DIR/repoflow" -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true
 cp "$SOURCE_DIR/requirements.txt" "$APP_DIR/"
 
@@ -111,6 +112,7 @@ Path=$APP_DIR
 Terminal=false
 Categories=Development;RevisionControl;
 StartupNotify=true
+Icon=$APP_DIR/assets/repoflow.svg
 DESKTOP
 chmod +x "$DESKTOP_DIR/repoflow.desktop"
 
@@ -124,7 +126,7 @@ elif command -v kbuildsycoca5 >/dev/null 2>&1; then
 fi
 
 echo
-echo "RepoFlow v0.2.7 terpasang."
+echo "RepoFlow v0.2.8 terpasang."
 echo "Python runtime: $($VENV_DIR/bin/python -c 'import sys; print(sys.executable + " | " + sys.version.split()[0] + " | base=" + sys.base_prefix)')"
 echo "Log diagnostik: $STATE_DIR/repoflow.log"
 if command -v secret-tool >/dev/null 2>&1; then

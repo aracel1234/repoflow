@@ -8,6 +8,7 @@ import sys
 
 import PySide6
 from PySide6.QtCore import qVersion
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from repoflow.services.git_service import GitService
@@ -59,6 +60,9 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("RepoFlow")
     app.setOrganizationName("RepoFlow")
+    icon_path = Path(__file__).resolve().parents[1] / "assets" / "repoflow.svg"
+    if icon_path.exists():
+        app.setWindowIcon(QIcon(str(icon_path)))
     app.setStyleSheet(APP_STYLE)
 
     if not GitService.git_available():

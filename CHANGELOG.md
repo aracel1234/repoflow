@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.2.8
+
+- Replaced `Commit & Push` with `Commit and Push` to avoid Qt mnemonic/underscore rendering.
+- Added explicit success feedback for fetch, pull, and push; `Already up to date.` now remains visible instead of being overwritten immediately.
+- Added an indeterminate status-bar activity indicator for background network operations.
+- Added safe binary-file detection and friendly binary previews for staged and unstaged files.
+- Refreshed the dark UI styling, spacing, repository header, diff typography, and status presentation.
+- Added a RepoFlow application icon and wired it into both the Qt application and KDE `.desktop` launcher.
+- Added regression tests for binary previews, first-push upstream creation, UI feedback, and icon registration.
+
 ## v0.2.7
 
 - Added KDE Neon/Ubuntu detection for the `libsecret-tools` system dependency used by secure GitHub token persistence.

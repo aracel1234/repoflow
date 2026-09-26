@@ -103,3 +103,13 @@ After T01-T19 pass, continue with:
 4. Expected: a **GitHub Authentication Failed** dialog appears, the sidebar remains **Connect GitHub**, and the application stays responsive.
 5. The log should contain `GitHub authentication failed` and the background task lifecycle.
 
+
+
+## v0.2.8 QA-polish smoke tests
+
+- **T51 — First-push upstream:** first push from a repository with `origin` but no upstream must establish `origin/main`.
+- **T52 — Already-up-to-date feedback:** Pull on an up-to-date repository must leave a visible `Already up to date.` status message.
+- **T53 — Binary preview:** selecting an untracked or staged binary file must never dump raw bytes into the diff viewer.
+- **T54 — Activity indicator:** clone/fetch/pull/push must show the status-bar activity indicator until the worker finishes.
+- **T55 — Commit-and-push label:** button text must render as `Commit and Push` with no mnemonic underscore.
+- **T56 — Application icon:** KDE launcher and RepoFlow window must use `assets/repoflow.svg`.

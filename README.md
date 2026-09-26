@@ -2,8 +2,8 @@
 
 RepoFlow is a lightweight desktop Git and GitHub client designed for Linux, with KDE-friendly installation and a workflow focused on everyday repository tasks without requiring terminal commands.
 
-> Current development version: **v0.2.7**
-> v0.2.7 improves secure GitHub-token persistence on KDE Neon/Ubuntu by detecting `libsecret-tools`, offering installation, and reporting Secret Service failures clearly.
+> Current development version: **v0.2.8**
+> v0.2.8 polishes the validated Git/GitHub workflow with clearer sync feedback, safe binary previews, visible background progress, a refreshed dark UI, and an integrated application icon.
 
 RepoFlow is currently under active development. The project is being tested incrementally before a stable release is published.
 
@@ -38,6 +38,7 @@ The application does **not** implement a separate version-control system. It ope
 - Stage and unstage files using checkboxes.
 - Detect **partially staged files**.
 - Display staged and unstaged diffs separately.
+- Detect binary files and show a safe metadata preview instead of decoding raw bytes.
 - Create commits from staged changes.
 - Create multiple local commits before pushing.
 - View commit history.
@@ -45,6 +46,7 @@ The application does **not** implement a separate version-control system. It ope
 - Fetch remote changes.
 - Pull using fast-forward-only mode.
 - Push and automatically establish the upstream branch on the first push.
+- Show explicit completion feedback for fetch, pull, and push operations, including `Already up to date.`
 - Connect or update a Git remote without using a terminal.
 - Open the configured GitHub remote in a browser.
 
@@ -217,12 +219,7 @@ or:
 python3 -m unittest discover -s tests -v
 ```
 
-Expected result for v0.2.3:
-
-```text
-Ran 6 tests
-OK
-```
+The exact count grows as regression coverage is added. For v0.2.8, run the suite and confirm that every discovered test finishes with `OK`.
 
 ## Project Structure
 
@@ -320,3 +317,15 @@ RepoFlow's own `.gitignore` excludes common local secret and environment files, 
 ## License
 
 No open-source license has been selected yet. Until a license is added, the source is published without granting additional reuse rights beyond those provided by applicable law and the hosting platform.
+
+
+## v0.2.8 QA Polish
+
+The v0.2.8 milestone follows the T01–T50 validation pass. It does not add new destructive Git behavior; it improves feedback and presentation around the already validated workflows.
+
+- `Commit and Push` avoids Qt mnemonic rendering from `&`.
+- Background operations display an indeterminate activity indicator in the status bar.
+- Success/error messages are no longer immediately overwritten by `Ready`.
+- Pulling an already synchronized repository explicitly reports `Already up to date.`
+- Binary files show a safe preview rather than raw byte output.
+- The installer registers the RepoFlow application icon with KDE.
