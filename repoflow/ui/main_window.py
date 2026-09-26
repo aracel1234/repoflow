@@ -66,6 +66,9 @@ class MainWindow(QMainWindow):
         self._loading_checks = False
         self._change_refresh_pending = False
         self.pool = QThreadPool.globalInstance()
+        # Keep Python-side worker wrappers alive until their Qt work finishes.
+        # Without this, queued success/error signals may be lost on some PySide6 runtimes.
+        self._active_workers: list[FunctionWorker] = []
         self.github_user: GitHubUser | None = None
         self.github_storage_note = ""
 
@@ -345,7 +348,7 @@ class MainWindow(QMainWindow):
 
     def clone_repository(self) -> None:
         dialog = CloneDialog(self)
-        if dialog.exec() != dialog.Accepted:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         url, destination = dialog.values()
         if not url or not destination:
@@ -388,12 +391,14 @@ class MainWindow(QMainWindow):
 
     def connect_github(self) -> None:
         dialog = GitHubTokenDialog(self)
-        if dialog.exec() != dialog.Accepted:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         token, remember = dialog.values()
         if not token:
             self._error("Paste a GitHub Personal Access Token first.")
             return
+
+        logger.info("GitHub authentication requested remember=%s", remember)
 
         def validate() -> GitHubUser:
             return GitHubService(token).get_user()
@@ -404,10 +409,26 @@ class MainWindow(QMainWindow):
             self.github_user = user
             self.settings.set_github_identity(user.login, user.name)
             self._update_github_button()
+            logger.info("GitHub authentication succeeded login=%r", user.login)
             self.statusBar().showMessage(f"Connected to GitHub as @{user.login}. {result.message}", 8000)
             QMessageBox.information(self, "RepoFlow", f"GitHub connected as @{user.login}.\n\n{result.message}")
 
-        self._run_background(validate, on_success=connected, busy="Connecting to GitHub…")
+        def auth_failed(message: str) -> None:
+            logger.warning("GitHub authentication failed: %s", message)
+            QMessageBox.warning(
+                self,
+                "GitHub Authentication Failed",
+                f"Could not connect this GitHub account.\n\n{message}",
+            )
+            self.statusBar().showMessage(f"GitHub authentication failed: {message}", 8000)
+            self._update_github_button()
+
+        self._run_background(
+            validate,
+            on_success=connected,
+            on_error=auth_failed,
+            busy="Connecting to GitHub…",
+        )
 
     def show_github_account(self) -> None:
         token = self.credentials.get_token()
@@ -457,7 +478,7 @@ class MainWindow(QMainWindow):
 
     def _open_github_repository_browser(self, repositories: list[GitHubRepository]) -> None:
         dialog = GitHubRepositoriesDialog(repositories, self)
-        if dialog.exec() != dialog.Accepted or not dialog.selected_repository:
+        if dialog.exec() != QDialog.DialogCode.Accepted or not dialog.selected_repository:
             return
         repo = dialog.selected_repository
         if dialog.action == "open":
@@ -484,7 +505,7 @@ class MainWindow(QMainWindow):
             return
         suggested = self.git.repo_info().name if self.git else ""
         dialog = CreateGitHubRepositoryDialog(suggested, self)
-        if dialog.exec() != dialog.Accepted:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         name, description, private = dialog.values()
         if not name:
@@ -746,7 +767,7 @@ class MainWindow(QMainWindow):
             return
         current = self.git.remote_url("origin") or ""
         dialog = RemoteDialog(current, self)
-        if dialog.exec() != dialog.Accepted:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         name, url = dialog.values()
         if not url:
@@ -898,12 +919,29 @@ class MainWindow(QMainWindow):
             self._populate_history()
 
     # ---------- Background work ----------
-    def _run_background(self, fn, *, on_success, busy: str) -> None:
+    def _run_background(self, fn, *, on_success, busy: str, on_error=None) -> None:
         self._set_busy(True, busy)
         worker = FunctionWorker(fn)
-        worker.signals.success.connect(on_success)
-        worker.signals.error.connect(self._error)
-        worker.signals.finished.connect(lambda: self._set_busy(False, "Ready"))
+        self._active_workers.append(worker)
+        logger.info("Background task started label=%r active_workers=%d", busy, len(self._active_workers))
+
+        def success(result) -> None:
+            logger.info("Background task succeeded label=%r", busy)
+            on_success(result)
+
+        def error(message: str) -> None:
+            logger.warning("Background task failed label=%r error=%s", busy, message)
+            (on_error or self._error)(message)
+
+        def finished() -> None:
+            self._set_busy(False, "Ready")
+            if worker in self._active_workers:
+                self._active_workers.remove(worker)
+            logger.info("Background task finished label=%r active_workers=%d", busy, len(self._active_workers))
+
+        worker.signals.success.connect(success)
+        worker.signals.error.connect(error)
+        worker.signals.finished.connect(finished)
         self.pool.start(worker)
 
     def _set_busy(self, busy: bool, message: str) -> None:

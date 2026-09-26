@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.2.6
+
+- Fixed Qt dialog acceptance checks for PySide6 6.11 by using `QDialog.DialogCode.Accepted`.
+- Fixed GitHub token dialog flow so valid and invalid tokens now reach API validation.
+- Applied the same dialog-result fix to Clone, GitHub repository browser, Create GitHub Repository, and Connect Remote flows.
+- Added regression coverage preventing instance-level `dialog.Accepted` checks from returning.
+
+
+## v0.2.5
+
+- Fixed silent GitHub authentication failures by keeping background worker objects alive until completion.
+- Added explicit invalid-token feedback with a `GitHub Authentication Failed` dialog and status-bar message.
+- Added background task lifecycle logging for GitHub and network operations.
+- Added regression coverage for GitHub 401 authentication errors and worker error signal delivery.
+
 ## v0.2.4
 
 ### Fixed

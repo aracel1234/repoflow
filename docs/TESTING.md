@@ -94,3 +94,12 @@ After T01-T19 pass, continue with:
 3. Switch back to `feature/qa-test`, then finally return to `main`.
 4. PASS when every switch updates both the header and checked branch menu entry.
 
+
+## GitHub authentication regression (T20)
+
+1. Open **GitHub → Account**.
+2. Enter an intentionally invalid token such as `invalid-token-repoflow-test`.
+3. Click **Connect**.
+4. Expected: a **GitHub Authentication Failed** dialog appears, the sidebar remains **Connect GitHub**, and the application stays responsive.
+5. The log should contain `GitHub authentication failed` and the background task lifecycle.
+
