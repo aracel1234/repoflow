@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.2.7
+
+- Added KDE Neon/Ubuntu detection for the `libsecret-tools` system dependency used by secure GitHub token persistence.
+- Installer now offers to install `libsecret-tools` when `secret-tool` is missing.
+- Improved credential diagnostics to distinguish a missing helper from a Secret Service backend failure.
+- Added `scripts/check_secure_storage.sh` for an end-to-end Secret Service store/lookup/clear probe.
+- Added automated tests for secure credential fallback, successful persistence, and backend failure messages.
+
+
 ## v0.2.6
 
 - Fixed Qt dialog acceptance checks for PySide6 6.11 by using `QDialog.DialogCode.Accepted`.

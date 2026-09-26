@@ -19,7 +19,7 @@ class GitHubError(RuntimeError):
 class GitHubService:
     API_BASE = "https://api.github.com"
     API_VERSION = "2026-03-10"
-    USER_AGENT = "RepoFlow/0.2.6"
+    USER_AGENT = "RepoFlow/0.2.7"
 
     def __init__(self, token: str):
         token = token.strip()

@@ -11,13 +11,20 @@ class CredentialSaveResult:
     message: str
 
 
+@dataclass(slots=True)
+class SecureStorageStatus:
+    available: bool
+    backend: str
+    message: str
+
+
 class CredentialService:
-    """GitHub token storage with zero Python crypto/keyring dependencies.
+    """GitHub token storage with no Python keyring/crypto dependency.
 
     The token always exists in memory for the current RepoFlow session.
-    When `secret-tool` is available, RepoFlow also attempts to persist it
-    using the desktop Secret Service. If the service/tool is unavailable,
-    persistence safely falls back to session-only storage.
+    Persistent storage uses the freedesktop Secret Service through
+    ``secret-tool`` when that helper is installed and the desktop secret
+    service accepts the write.
     """
 
     LABEL = "RepoFlow GitHub token"
@@ -31,8 +38,24 @@ class CredentialService:
         return shutil.which("secret-tool")
 
     @classmethod
+    def secure_storage_status(cls) -> SecureStorageStatus:
+        tool = cls._secret_tool()
+        if tool is None:
+            return SecureStorageStatus(
+                False,
+                "missing-secret-tool",
+                "Secure storage helper 'secret-tool' is not installed. "
+                "On KDE Neon/Ubuntu install it with: sudo apt install libsecret-tools",
+            )
+        return SecureStorageStatus(
+            True,
+            "secret-service",
+            f"Secret Service helper available at {tool}.",
+        )
+
+    @classmethod
     def secure_storage_available(cls) -> bool:
-        return cls._secret_tool() is not None
+        return cls.secure_storage_status().available
 
     @classmethod
     def _run_secret_tool(
@@ -76,7 +99,6 @@ class CredentialService:
         if not token:
             raise ValueError("GitHub token cannot be empty.")
 
-        # Always keep it in RAM so GitHub operations work immediately.
         self._session_token = token
 
         if not remember:
@@ -85,11 +107,9 @@ class CredentialService:
                 "Token will be kept only until RepoFlow closes.",
             )
 
-        if not self.secure_storage_available():
-            return CredentialSaveResult(
-                False,
-                "Secure system credential storage is unavailable; token is session-only.",
-            )
+        status = self.secure_storage_status()
+        if not status.available:
+            return CredentialSaveResult(False, status.message + " Token is session-only for now.")
 
         result = self._run_secret_tool(
             ["store", f"--label={self.LABEL}", *self.ATTRS],
@@ -98,12 +118,19 @@ class CredentialService:
         if result is not None and result.returncode == 0:
             return CredentialSaveResult(
                 True,
-                "Token saved using the system Secret Service.",
+                "Token saved securely using the system Secret Service.",
             )
 
+        detail = ""
+        if result is not None:
+            detail = (result.stderr or result.stdout or "").strip()
+        suffix = f" Details: {detail}" if detail else ""
         return CredentialSaveResult(
             False,
-            "Secure credential storage could not save the token; token is session-only.",
+            "'secret-tool' is installed, but the desktop Secret Service could not save the token. "
+            "Ensure a Secret Service provider is available/unlocked in your desktop session."
+            + suffix
+            + " Token is session-only for now.",
         )
 
     def clear(self) -> None:

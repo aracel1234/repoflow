@@ -13,6 +13,31 @@ if ! command -v git >/dev/null 2>&1; then
   exit 1
 fi
 
+# Optional but strongly recommended: secure GitHub token persistence.
+if ! command -v secret-tool >/dev/null 2>&1; then
+  echo
+  echo "RepoFlow: 'secret-tool' belum tersedia."
+  echo "Fitur Remember GitHub Token memerlukan paket libsecret-tools pada KDE Neon/Ubuntu."
+  if command -v apt-get >/dev/null 2>&1 && [ -t 0 ]; then
+    read -r -p "Install libsecret-tools sekarang? [Y/n] " answer
+    answer="${answer:-Y}"
+    case "$answer" in
+      [Yy]*)
+        if sudo apt-get install -y libsecret-tools; then
+          echo "RepoFlow: libsecret-tools berhasil dipasang."
+        else
+          echo "WARNING: libsecret-tools gagal dipasang. RepoFlow tetap dapat berjalan, tetapi token GitHub hanya akan disimpan selama sesi aplikasi."
+        fi
+        ;;
+      *)
+        echo "RepoFlow: melewati instalasi libsecret-tools. Token GitHub akan session-only sampai helper tersebut tersedia."
+        ;;
+    esac
+  else
+    echo "Install manual jika ingin penyimpanan token aman: sudo apt install libsecret-tools"
+  fi
+fi
+
 if [ -x /usr/bin/python3 ]; then
   SYSTEM_PYTHON=/usr/bin/python3
 else
@@ -99,7 +124,12 @@ elif command -v kbuildsycoca5 >/dev/null 2>&1; then
 fi
 
 echo
-echo "RepoFlow v0.2.6 terpasang."
+echo "RepoFlow v0.2.7 terpasang."
 echo "Python runtime: $($VENV_DIR/bin/python -c 'import sys; print(sys.executable + " | " + sys.version.split()[0] + " | base=" + sys.base_prefix)')"
 echo "Log diagnostik: $STATE_DIR/repoflow.log"
+if command -v secret-tool >/dev/null 2>&1; then
+  echo "Secure credential helper: $(command -v secret-tool)"
+else
+  echo "Secure credential helper: unavailable (GitHub token persistence will be session-only)"
+fi
 echo "Cari 'RepoFlow' di Application Launcher KDE."

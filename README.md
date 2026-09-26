@@ -2,8 +2,8 @@
 
 RepoFlow is a lightweight desktop Git and GitHub client designed for Linux, with KDE-friendly installation and a workflow focused on everyday repository tasks without requiring terminal commands.
 
-> Current development version: **v0.2.6**
-> v0.2.6 fixes Qt dialog-result handling across GitHub, clone, remote, and repository dialogs while retaining the validated local Git core.
+> Current development version: **v0.2.7**
+> v0.2.7 improves secure GitHub-token persistence on KDE Neon/Ubuntu by detecting `libsecret-tools`, offering installation, and reporting Secret Service failures clearly.
 
 RepoFlow is currently under active development. The project is being tested incrementally before a stable release is published.
 
@@ -122,6 +122,7 @@ Recommended environment:
 - Python 3.10+
 - Python `venv`
 - PySide6 6.7+
+- `libsecret-tools` (recommended for securely remembering GitHub tokens across restarts)
 
 The KDE Neon installer explicitly prefers `/usr/bin/python3` to isolate RepoFlow from Conda/Miniconda Python and Qt libraries.
 
@@ -138,6 +139,18 @@ If Python venv support is missing:
 
 ```bash
 sudo apt install python3-venv
+```
+
+For secure GitHub-token persistence, the installer can install `libsecret-tools` when `secret-tool` is missing. It can also be installed manually:
+
+```bash
+sudo apt install libsecret-tools
+```
+
+To verify the desktop Secret Service end to end:
+
+```bash
+./scripts/check_secure_storage.sh
 ```
 
 After installation, search for **RepoFlow** in the KDE Application Launcher.
