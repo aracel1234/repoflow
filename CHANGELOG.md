@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.3.0
+
+- Added Stage 3 safety review before staging likely secret-bearing files such as `.env`, private keys, keystores, credential files, and Terraform state.
+- Added large-file warnings before staging/committing unusually large files without silently blocking local Git workflows.
+- Added **Add to .gitignore** as a safe alternative when an untracked risky file should not be versioned.
+- Added **Repository → Manage .gitignore…** with a direct editor plus Python, Node, Android, and Secrets presets.
+- Added a second safety gate before commit so risky files staged outside RepoFlow are still reviewed.
+- Added proactive `⚠ Review` markers in the Changes table for files that deserve safety review.
+- Added visible conflict and divergence safety banners. Pull and Push are disabled while conflicts are unresolved or histories are diverged.
+- Added explanatory conflict/divergence dialogs without automatic merge, rebase, reset, or force-push behavior.
+- Preserved fetch during conflicted/diverged states so remote information can still be refreshed safely.
+- Added regression coverage for sensitive-file detection, large-file detection, `.gitignore` management, conflict detection, and ahead/behind divergence state.
+
 ## v0.2.8
 
 - Replaced `Commit & Push` with `Commit and Push` to avoid Qt mnemonic/underscore rendering.

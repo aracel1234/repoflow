@@ -2,8 +2,8 @@
 
 RepoFlow is a lightweight desktop Git and GitHub client designed for Linux, with KDE-friendly installation and a workflow focused on everyday repository tasks without requiring terminal commands.
 
-> Current development version: **v0.2.8**
-> v0.2.8 polishes the validated Git/GitHub workflow with clearer sync feedback, safe binary previews, visible background progress, a refreshed dark UI, and an integrated application icon.
+> Current development version: **v0.3.0**
+> v0.3.0 begins Stage 3 with pre-commit safety review, `.gitignore` management, large-file warnings, and clearer conflict/divergence protection while keeping Git as the source of truth.
 
 RepoFlow is currently under active development. The project is being tested incrementally before a stable release is published.
 
@@ -43,6 +43,11 @@ The application does **not** implement a separate version-control system. It ope
 - Create multiple local commits before pushing.
 - View commit history.
 - Create and switch local branches.
+- Warn before staging likely credential/key files and unusually large files.
+- Review risky staged files again before commit when they were staged outside RepoFlow.
+- Manage `.gitignore` from the Repository menu with optional common presets.
+- Surface unresolved conflicts and diverged histories with explicit safety banners.
+- Block Pull/Push during unresolved conflict/divergence states without force-pushing or choosing a reconciliation strategy automatically.
 - Fetch remote changes.
 - Pull using fast-forward-only mode.
 - Push and automatically establish the upstream branch on the first push.
@@ -219,7 +224,7 @@ or:
 python3 -m unittest discover -s tests -v
 ```
 
-The exact count grows as regression coverage is added. For v0.2.8, run the suite and confirm that every discovered test finishes with `OK`.
+The exact count grows as regression coverage is added. For v0.3.0, run the suite and confirm that every discovered test finishes with `OK`.
 
 ## Project Structure
 
@@ -228,6 +233,7 @@ RepoFlow/
 ├── repoflow/
 │   ├── core/
 │   │   ├── models.py
+│   │   ├── safety.py
 │   │   ├── settings.py
 │   │   └── workers.py
 │   ├── services/
@@ -287,10 +293,7 @@ Network Git operations run outside the main UI thread so clone, fetch, pull, and
 
 ### Planned
 
-- `.gitignore` management UI
-- sensitive-file warnings
-- large-file warnings
-- richer conflict detection and resolution
+- in-app conflict resolution assistance
 - merge/rebase decision workflow
 - hunk/line staging
 - stash support
@@ -329,3 +332,28 @@ The v0.2.8 milestone follows the T01–T50 validation pass. It does not add new 
 - Pulling an already synchronized repository explicitly reports `Already up to date.`
 - Binary files show a safe preview rather than raw byte output.
 - The installer registers the RepoFlow application icon with KDE.
+
+
+## v0.3.0 Stage 3 — Safety & Quality of Life
+
+The first Stage 3 milestone adds guardrails around common repository mistakes while deliberately preserving user control. RepoFlow warns; it does not silently delete files, rewrite history, choose a merge/rebase strategy, or force-push.
+
+### Safety review
+
+RepoFlow reviews filenames and file size before staging/committing. Examples that trigger review include `.env`, common credential files, private-key/keystore formats, service-account files, Terraform state, and files above the large-file warning threshold. `.env.example`, `.env.sample`, and `.env.template` are intentionally treated as examples rather than secrets.
+
+For an untracked risky file, the staging dialog offers three choices:
+
+- **Cancel** — leave the working tree unchanged.
+- **Add to .gitignore** — add a repository-root anchored rule and do not stage the file.
+- **Stage Anyway** — acknowledge the warning and stage normally.
+
+A second commit-time review catches risky files that were staged outside RepoFlow.
+
+### `.gitignore` manager
+
+Open **Repository → Manage .gitignore…** to edit the repository `.gitignore` directly. Optional Python, Node, Android, and Secrets presets append missing rules without deleting existing content.
+
+### Conflict and divergence protection
+
+If Git reports unresolved conflicts, RepoFlow shows a safety banner and disables Pull/Push until the conflicts are resolved and staged. If the current branch is both ahead and behind its upstream, RepoFlow shows a divergence banner and disables Pull/Push rather than choosing merge, rebase, reset, or force-push automatically. Fetch remains available so remote state can still be refreshed.

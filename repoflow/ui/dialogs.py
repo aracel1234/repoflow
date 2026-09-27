@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QDesktopServices, QTextCursor
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -16,12 +16,14 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QPlainTextEdit,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
 from repoflow.core.models import GitHubRepository, GitHubUser
+from repoflow.core.safety import SafetyIssue, SafetyScanner
 
 
 class CloneDialog(QDialog):
@@ -367,3 +369,174 @@ class GitHubRepositoriesDialog(QDialog):
             return
         self.action = action
         self.accept()
+
+
+class SafetyWarningDialog(QDialog):
+    def __init__(
+        self,
+        issues: list[SafetyIssue],
+        *,
+        context: str,
+        allow_ignore: bool = False,
+        parent: QWidget | None = None,
+    ):
+        super().__init__(parent)
+        self.setWindowTitle("Safety Review")
+        self.resize(680, 460)
+        self.action = "cancel"
+
+        heading = QLabel("Review these files before continuing")
+        heading.setObjectName("title")
+        description = QLabel(
+            "RepoFlow found files that may expose credentials or make repository history unusually heavy. "
+            "Nothing has been uploaded by this warning. Review the files and choose what to do."
+        )
+        description.setObjectName("muted")
+        description.setWordWrap(True)
+
+        details = QPlainTextEdit()
+        details.setReadOnly(True)
+        details.setObjectName("safetyDetails")
+        blocks: list[str] = []
+        for issue in issues:
+            size = f" • {SafetyScanner.format_size(issue.size_bytes)}" if issue.size_bytes is not None else ""
+            blocks.append(
+                f"[{issue.severity.upper()}] {issue.path}{size}\n"
+                f"{issue.title}: {issue.detail}"
+            )
+        details.setPlainText("\n\n".join(blocks))
+
+        note = QLabel(
+            "Tip: only add a file to .gitignore when it should not be versioned. "
+            "Ignoring a file that Git already tracks does not remove it from history."
+        )
+        note.setObjectName("muted")
+        note.setWordWrap(True)
+
+        row = QHBoxLayout()
+        cancel = QPushButton("Cancel")
+        cancel.clicked.connect(self.reject)
+        row.addWidget(cancel)
+        row.addStretch(1)
+
+        if allow_ignore:
+            ignore = QPushButton("Add to .gitignore")
+            ignore.clicked.connect(lambda: self._choose("ignore"))
+            row.addWidget(ignore)
+
+        continue_button = QPushButton("Stage Anyway" if context == "stage" else "Commit Anyway")
+        continue_button.setObjectName("dangerAction")
+        continue_button.clicked.connect(lambda: self._choose("continue"))
+        row.addWidget(continue_button)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(heading)
+        layout.addWidget(description)
+        layout.addWidget(details, 1)
+        layout.addWidget(note)
+        layout.addLayout(row)
+
+    def _choose(self, action: str) -> None:
+        self.action = action
+        self.accept()
+
+
+class GitIgnoreDialog(QDialog):
+    PRESETS: dict[str, list[str]] = {
+        "Python": [".venv/", "venv/", "__pycache__/", "*.py[cod]", ".pytest_cache/"],
+        "Node": ["node_modules/", "dist/", ".npm/", "npm-debug.log*", "yarn-error.log*"],
+        "Android": [".gradle/", "local.properties", "*.jks", "*.keystore", "build/", "*/build/"],
+        "Secrets": [
+            ".env",
+            ".env.*",
+            "!.env.example",
+            "!.env.sample",
+            "*.pem",
+            "*.key",
+            "*.p12",
+            "*.pfx",
+            "key.properties",
+            "keystore.properties",
+        ],
+    }
+
+    def __init__(self, text: str, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setWindowTitle("Manage .gitignore")
+        self.resize(700, 560)
+
+        title = QLabel(".gitignore")
+        title.setObjectName("title")
+        description = QLabel(
+            "Edit repository ignore rules directly. Preset buttons append common patterns without removing your existing rules."
+        )
+        description.setObjectName("muted")
+        description.setWordWrap(True)
+
+        self.editor = QPlainTextEdit()
+        self.editor.setObjectName("gitignoreEditor")
+        self.editor.setPlaceholderText("# Example\n.env\n.venv/\nbuild/")
+        self.editor.setPlainText(text)
+
+        preset_row = QHBoxLayout()
+        preset_row.addWidget(QLabel("Add preset:"))
+        for name in self.PRESETS:
+            button = QPushButton(name)
+            button.clicked.connect(lambda _checked=False, preset=name: self._append_preset(preset))
+            preset_row.addWidget(button)
+        preset_row.addStretch(1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Cancel | QDialogButtonBox.Save)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(title)
+        layout.addWidget(description)
+        layout.addLayout(preset_row)
+        layout.addWidget(self.editor, 1)
+        layout.addWidget(buttons)
+
+    def _append_preset(self, name: str) -> None:
+        current = self.editor.toPlainText().replace("\r\n", "\n").replace("\r", "\n")
+        lines = current.splitlines()
+        existing = {line.strip() for line in lines if line.strip()}
+        additions = [pattern for pattern in self.PRESETS[name] if pattern not in existing]
+        if not additions:
+            return
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.append(f"# RepoFlow preset: {name}")
+        lines.extend(additions)
+        self.editor.setPlainText("\n".join(lines) + "\n")
+        cursor = self.editor.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        self.editor.setTextCursor(cursor)
+
+    def text(self) -> str:
+        return self.editor.toPlainText()
+
+
+class RepositorySafetyDialog(QDialog):
+    def __init__(self, title: str, heading: str, body: str, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setMinimumWidth(620)
+
+        heading_label = QLabel(heading)
+        heading_label.setObjectName("title")
+        body_label = QLabel(body)
+        body_label.setWordWrap(True)
+        body_label.setObjectName("muted")
+
+        close = QPushButton("Close")
+        close.clicked.connect(self.accept)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(close)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(heading_label)
+        layout.addWidget(body_label)
+        layout.addSpacing(8)
+        layout.addLayout(row)

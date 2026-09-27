@@ -8,6 +8,7 @@ from typing import Iterable
 from urllib.parse import urlparse
 
 from repoflow.core.models import CommitInfo, GitFile, RepoInfo
+from repoflow.core.safety import SafetyIssue, SafetyScanner
 
 
 class GitError(RuntimeError):
@@ -257,6 +258,53 @@ esac
             self._run(["restore", "--staged", "--", *items])
         else:
             self._run(["rm", "--cached", "-r", "--ignore-unmatch", "--", *items], check=False)
+
+    def is_tracked(self, path: str) -> bool:
+        result = self._run(["ls-files", "--error-unmatch", "--", path], check=False)
+        return result.returncode == 0
+
+    def safety_issues(self, paths: Iterable[str]) -> list[SafetyIssue]:
+        return SafetyScanner.inspect_paths(self.root(), list(paths))
+
+    def read_gitignore(self) -> str:
+        path = Path(self.root()) / ".gitignore"
+        if not path.exists():
+            return ""
+        try:
+            return path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as exc:
+            raise GitError(".gitignore is not valid UTF-8 and cannot be edited safely in RepoFlow.") from exc
+        except OSError as exc:
+            raise GitError(f"Could not read .gitignore: {exc}") from exc
+
+    def write_gitignore(self, text: str) -> None:
+        path = Path(self.root()) / ".gitignore"
+        normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+        if normalized and not normalized.endswith("\n"):
+            normalized += "\n"
+        try:
+            path.write_text(normalized, encoding="utf-8")
+        except OSError as exc:
+            raise GitError(f"Could not write .gitignore: {exc}") from exc
+
+    def append_gitignore_patterns(self, patterns: Iterable[str]) -> list[str]:
+        current = self.read_gitignore()
+        lines = current.splitlines()
+        existing = {line.strip() for line in lines if line.strip()}
+        added: list[str] = []
+        for pattern in patterns:
+            value = pattern.strip()
+            if not value or value in existing:
+                continue
+            lines.append(value)
+            existing.add(value)
+            added.append(value)
+        if added:
+            self.write_gitignore("\n".join(lines))
+        return added
+
+    def conflicted_files(self) -> list[GitFile]:
+        return [entry for entry in self.status() if entry.conflicted]
 
     @staticmethod
     def _format_size(size: int) -> str:

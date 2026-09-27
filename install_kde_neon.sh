@@ -126,7 +126,7 @@ elif command -v kbuildsycoca5 >/dev/null 2>&1; then
 fi
 
 echo
-echo "RepoFlow v0.2.8 terpasang."
+echo "RepoFlow v0.3.0 terpasang."
 echo "Python runtime: $($VENV_DIR/bin/python -c 'import sys; print(sys.executable + " | " + sys.version.split()[0] + " | base=" + sys.base_prefix)')"
 echo "Log diagnostik: $STATE_DIR/repoflow.log"
 if command -v secret-tool >/dev/null 2>&1; then

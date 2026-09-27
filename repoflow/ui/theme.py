@@ -128,3 +128,34 @@ QScrollBar::handle:vertical {
 }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 """
+
+# Stage 3 safety surfaces.
+APP_STYLE += r"""
+QLabel#safetyBanner {
+    color: #ffd68a;
+    background: #2a2114;
+    border: 1px solid #6b4d1f;
+    border-radius: 9px;
+    padding: 9px 11px;
+    font-weight: 600;
+}
+QPushButton#warningAction {
+    background: #3a2c16;
+    border-color: #8a6427;
+    color: #ffd68a;
+    font-weight: 650;
+}
+QPushButton#warningAction:hover { background: #49371b; }
+QPushButton#dangerAction {
+    background: #7f2934;
+    border-color: #b44959;
+    color: #ffffff;
+    font-weight: 650;
+}
+QPushButton#dangerAction:hover { background: #953441; }
+QPlainTextEdit#safetyDetails, QPlainTextEdit#gitignoreEditor {
+    background: #0a0f15;
+    font-family: "JetBrains Mono", "Noto Sans Mono", monospace;
+    font-size: 12px;
+}
+"""

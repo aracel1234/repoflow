@@ -28,7 +28,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from repoflow.core.models import GitFile, GitHubRepository, GitHubUser
+from repoflow.core.models import FileKind, GitFile, GitHubRepository, GitHubUser
+from repoflow.core.safety import SafetyScanner
 from repoflow.core.settings import AppSettings
 from repoflow.core.workers import FunctionWorker
 from repoflow.services.credential_service import CredentialService
@@ -44,7 +45,10 @@ from repoflow.ui.dialogs import (
     GitHubAccountDialog,
     GitHubRepositoriesDialog,
     GitHubTokenDialog,
+    GitIgnoreDialog,
     RemoteDialog,
+    RepositorySafetyDialog,
+    SafetyWarningDialog,
 )
 
 
@@ -72,6 +76,13 @@ class MainWindow(QMainWindow):
         self._active_workers: list[FunctionWorker] = []
         self.github_user: GitHubUser | None = None
         self.github_storage_note = ""
+        self._safety_acknowledged_paths: set[str] = set()
+        self._current_conflicts: list[GitFile] = []
+        self._current_diverged = False
+        self._can_fetch = False
+        self._can_pull = False
+        self._can_push = False
+        self._is_busy = False
 
         self._build_ui()
         self._build_menu()
@@ -209,6 +220,20 @@ class MainWindow(QMainWindow):
 
         self.sync_label = QLabel("Select a repository to view changes.")
         self.sync_label.setObjectName("syncBadge")
+
+        safety_row = QHBoxLayout()
+        safety_row.setContentsMargins(0, 0, 0, 0)
+        self.safety_notice = QLabel("")
+        self.safety_notice.setObjectName("safetyBanner")
+        self.safety_notice.setWordWrap(True)
+        self.safety_notice.hide()
+        self.safety_button = QPushButton("Review Safety")
+        self.safety_button.setObjectName("warningAction")
+        self.safety_button.clicked.connect(self._show_repository_safety)
+        self.safety_button.hide()
+        safety_row.addWidget(self.safety_notice, 1)
+        safety_row.addWidget(self.safety_button)
+
         self.stage_legend = QLabel("Checkbox: ☐ unstaged   ☑ staged   ◩ partially staged")
         self.stage_legend.setObjectName("muted")
 
@@ -247,6 +272,7 @@ class MainWindow(QMainWindow):
         commit_layout.addWidget(self.commit_push_button)
 
         layout.addWidget(self.sync_label)
+        layout.addLayout(safety_row)
         layout.addWidget(self.stage_legend)
         layout.addWidget(splitter, 1)
         layout.addWidget(commit_panel)
@@ -271,6 +297,10 @@ class MainWindow(QMainWindow):
         repo_menu.addAction(open_action)
         repo_menu.addAction(clone_action)
         repo_menu.addAction(init_action)
+        repo_menu.addSeparator()
+        gitignore_action = QAction("Manage .gitignore…", self)
+        gitignore_action.triggered.connect(self.manage_gitignore)
+        repo_menu.addAction(gitignore_action)
         repo_menu.addSeparator()
         quit_action = QAction("Quit", self)
         quit_action.triggered.connect(self.close)
@@ -385,6 +415,7 @@ class MainWindow(QMainWindow):
         )
 
     def open_repository(self, path: str) -> None:
+        self._safety_acknowledged_paths.clear()
         path = str(Path(path).expanduser().resolve())
         if not GitService.is_repository(path):
             self._error("The selected folder is not a Git repository.")
@@ -560,6 +591,60 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "GitHub Repository Created", f"Created {repo.full_name}.\n{repo.html_url}{suffix}")
         self.statusBar().showMessage(f"Created {repo.full_name} on GitHub.", 6000)
 
+    # ---------- Safety / ignore rules ----------
+    def manage_gitignore(self) -> None:
+        if not self.git:
+            self._error("Open a repository before editing .gitignore.")
+            return
+        try:
+            dialog = GitIgnoreDialog(self.git.read_gitignore(), self)
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            self.git.write_gitignore(dialog.text())
+            self.refresh_all()
+            self.statusBar().showMessage(".gitignore saved.", 4000)
+        except GitError as exc:
+            self._error(str(exc))
+
+    def _show_repository_safety(self) -> None:
+        if not self.git:
+            return
+        try:
+            info = self.git.repo_info()
+        except GitError as exc:
+            self._error(str(exc))
+            return
+
+        if self._current_conflicts:
+            paths = "\n".join(f"• {entry.path}" for entry in self._current_conflicts[:12])
+            if len(self._current_conflicts) > 12:
+                paths += f"\n• …and {len(self._current_conflicts) - 12} more"
+            body = (
+                "RepoFlow detected unresolved merge conflicts. Pull and Push are disabled while the index is conflicted.\n\n"
+                f"Conflicted files:\n{paths}\n\n"
+                "Edit each file to resolve the conflict markers, then stage the resolved file with its checkbox. "
+                "When no Conflict rows remain, create the appropriate commit and refresh."
+            )
+            RepositorySafetyDialog("Resolve Conflicts", "Unresolved conflicts", body, self).exec()
+            return
+
+        if self._current_diverged:
+            body = (
+                f"The current branch is {info.ahead} commit(s) ahead and {info.behind} commit(s) behind its upstream.\n\n"
+                "RepoFlow deliberately does not choose a merge, rebase, reset, or force-push strategy for you. "
+                "Pull and Push remain disabled until the histories are reconciled with the strategy you choose. "
+                "After resolving the divergence in a Git tool that supports that workflow, return here and press Refresh."
+            )
+            RepositorySafetyDialog("Diverged History", "Local and remote histories diverged", body, self).exec()
+            return
+
+        RepositorySafetyDialog(
+            "Repository Safety",
+            "No blocking repository state detected",
+            "There are currently no unresolved conflicts or diverged upstream histories blocking RepoFlow sync operations.",
+            self,
+        ).exec()
+
     # ---------- Refresh ----------
     def refresh_all(self) -> None:
         if not self.git:
@@ -568,22 +653,51 @@ class MainWindow(QMainWindow):
         try:
             info = self.git.repo_info()
             files = self.git.status()
+            conflicts = [entry for entry in files if entry.conflicted]
+            diverged = bool(info.upstream and info.ahead > 0 and info.behind > 0)
+            self._current_conflicts = conflicts
+            self._current_diverged = diverged
+
             self.repo_title.setText(info.name)
             remote = info.remote_url or "Local only"
             upstream = info.upstream or "No upstream"
             self.repo_meta.setText(f"{info.root}   •   {info.branch}   •   {remote}")
             self.branch_button.setText(info.branch)
-            self.remote_open_button.setEnabled(bool(info.remote_url))
-            self.fetch_button.setEnabled(bool(info.remote_name))
-            self.pull_button.setEnabled(bool(info.remote_name))
-            self.push_button.setEnabled(bool(info.remote_name))
+            self.remote_open_button.setEnabled(bool(info.remote_url) and not self._is_busy)
             self.remote_button.setText("Remote ✓" if info.remote_url else "Connect Remote")
 
-            if info.ahead == 0 and info.behind == 0:
+            self._can_fetch = bool(info.remote_name)
+            self._can_pull = bool(info.remote_name) and not conflicts and not diverged
+            self._can_push = bool(info.remote_name) and not conflicts and not diverged
+            self._apply_operation_button_state()
+
+            if diverged:
+                sync = f"Diverged • ↑ {info.ahead} local   ↓ {info.behind} remote"
+            elif info.ahead == 0 and info.behind == 0:
                 sync = "Up to date" if info.upstream else "No upstream yet"
             else:
                 sync = f"↑ {info.ahead} commit(s) to push   ↓ {info.behind} commit(s) to pull"
             self.sync_label.setText(f"{len(files)} changed file(s)   •   {sync}   •   {upstream}")
+
+            if conflicts:
+                self.safety_notice.setText(
+                    f"⚠ {len(conflicts)} unresolved conflict(s). Resolve and stage them before syncing."
+                )
+                self.safety_button.setText("Review Conflicts")
+                self.safety_notice.show()
+                self.safety_button.show()
+            elif diverged:
+                self.safety_notice.setText(
+                    f"⚠ Local and remote histories diverged (↑ {info.ahead} / ↓ {info.behind}). "
+                    "RepoFlow blocks Pull and Push until you choose how to reconcile them."
+                )
+                self.safety_button.setText("Review Divergence")
+                self.safety_notice.show()
+                self.safety_button.show()
+            else:
+                self.safety_notice.hide()
+                self.safety_button.hide()
+
             self._populate_changes(files)
             if self.tabs.currentIndex() == 1:
                 self._populate_history()
@@ -598,6 +712,11 @@ class MainWindow(QMainWindow):
         self.history_list.clear()
         self.diff_view.clear()
         self.sync_label.setText("No repository selected.")
+        self.safety_notice.hide()
+        self.safety_button.hide()
+        self._current_conflicts = []
+        self._current_diverged = False
+        self._can_fetch = self._can_pull = self._can_push = False
         for button in (
             self.branch_button,
             self.refresh_button,
@@ -606,6 +725,8 @@ class MainWindow(QMainWindow):
             self.push_button,
             self.remote_button,
             self.remote_open_button,
+            self.commit_button,
+            self.commit_push_button,
         ):
             button.setEnabled(False)
 
@@ -639,6 +760,13 @@ class MainWindow(QMainWindow):
                     status_text += " · Partially staged"
                 elif entry.fully_staged:
                     status_text += " · Staged"
+                safety_issues = (
+                    []
+                    if entry.kind == FileKind.DELETED or not self.repo_path
+                    else SafetyScanner.inspect_path(self.repo_path, entry.path)
+                )
+                if safety_issues:
+                    status_text += " · ⚠ Review"
                 item.setText(self.COL_STATUS, status_text)
                 item.setText(self.COL_PATH, entry.path)
                 item.setData(self.COL_PATH, Qt.UserRole, entry.path)
@@ -651,6 +779,9 @@ class MainWindow(QMainWindow):
                     tooltip += " | Only staged changes will be included in the next commit."
                 if entry.original_path:
                     tooltip += f" | From: {entry.original_path}"
+                if safety_issues:
+                    categories = ", ".join(sorted({issue.title for issue in safety_issues}))
+                    tooltip += f" | Safety review: {categories}"
                 for column in (self.COL_CHECK, self.COL_STATUS, self.COL_PATH):
                     item.setToolTip(column, tooltip)
 
@@ -694,18 +825,40 @@ class MainWindow(QMainWindow):
         state = item.checkState(self.COL_CHECK)
         logger.info("Staging checkbox changed path=%r state=%s", path, state)
         try:
+            entry = self._status_entry_for_path(path)
             # From a partially staged row, checking means "stage the complete
             # current file" while unchecking means "unstage the complete file".
-            # The partial state itself is display-only and is recalculated from Git.
             if state == Qt.Checked:
+                if entry and entry.kind != FileKind.DELETED and path not in self._safety_acknowledged_paths:
+                    issues = self.git.safety_issues([path])
+                    if issues:
+                        dialog = SafetyWarningDialog(
+                            issues,
+                            context="stage",
+                            allow_ignore=entry.untracked,
+                            parent=self,
+                        )
+                        if dialog.exec() != QDialog.DialogCode.Accepted:
+                            self.statusBar().showMessage(f"Staging cancelled for {path}", 3000)
+                            return
+                        if dialog.action == "ignore":
+                            pattern = SafetyScanner.exact_gitignore_pattern(path)
+                            self.git.append_gitignore_patterns([pattern])
+                            self.statusBar().showMessage(
+                                f"Added {pattern} to .gitignore instead of staging {path}.", 5000
+                            )
+                            return
+                        if dialog.action != "continue":
+                            return
+                        self._safety_acknowledged_paths.add(path)
+
                 self.git.stage([path])
                 self.statusBar().showMessage(f"Staged all current changes in {path}", 2200)
             elif state == Qt.Unchecked:
                 self.git.unstage([path])
+                self._safety_acknowledged_paths.discard(path)
                 self.statusBar().showMessage(f"Unstaged {path}", 2200)
             else:
-                # Qt should normally move a user click away from PartiallyChecked.
-                # If a platform/theme leaves it partial, simply restore Git's truth.
                 self.statusBar().showMessage(f"{path} is partially staged", 1800)
         except GitError as exc:
             logger.exception("Stage/unstage failed for %r", path)
@@ -775,7 +928,25 @@ class MainWindow(QMainWindow):
             if not staged:
                 self._error("No files are staged. Tick at least one checkbox first.")
                 return
+            if any(entry.conflicted for entry in staged):
+                self._error("Resolve all merge conflicts before committing.")
+                return
+
+            candidates = [
+                entry.path
+                for entry in staged
+                if entry.kind != FileKind.DELETED and entry.path not in self._safety_acknowledged_paths
+            ]
+            issues = self.git.safety_issues(candidates) if candidates else []
+            if issues:
+                dialog = SafetyWarningDialog(issues, context="commit", allow_ignore=False, parent=self)
+                if dialog.exec() != QDialog.DialogCode.Accepted or dialog.action != "continue":
+                    self.statusBar().showMessage("Commit cancelled during safety review.", 3500)
+                    return
+                self._safety_acknowledged_paths.update(issue.path for issue in issues)
+
             output = self.git.commit(message)
+            self._safety_acknowledged_paths.clear()
             self.commit_message.clear()
             self.refresh_all()
             self.statusBar().showMessage(output.splitlines()[0] if output else "Commit created.", 5000)
@@ -785,6 +956,7 @@ class MainWindow(QMainWindow):
             self._error(str(exc))
 
     # ---------- Remote operations ----------
+
     def connect_remote(self) -> None:
         if not self.git:
             return
@@ -816,6 +988,12 @@ class MainWindow(QMainWindow):
     def pull(self) -> None:
         if not self.git:
             return
+        if self._current_conflicts:
+            self._error("Resolve all merge conflicts before pulling.")
+            return
+        if self._current_diverged:
+            self._show_repository_safety()
+            return
         token, username = self._github_auth()
 
         def task() -> str:
@@ -826,6 +1004,12 @@ class MainWindow(QMainWindow):
 
     def push(self) -> None:
         if not self.git:
+            return
+        if self._current_conflicts:
+            self._error("Resolve all merge conflicts before pushing.")
+            return
+        if self._current_diverged:
+            self._show_repository_safety()
             return
         info = self.git.repo_info()
         if not info.remote_name:
@@ -980,12 +1164,26 @@ class MainWindow(QMainWindow):
         worker.signals.finished.connect(finished)
         self.pool.start(worker)
 
+    def _apply_operation_button_state(self) -> None:
+        has_repo = self.git is not None
+        available = has_repo and not self._is_busy
+        self.refresh_button.setEnabled(available)
+        self.fetch_button.setEnabled(available and self._can_fetch)
+        self.pull_button.setEnabled(available and self._can_pull)
+        self.push_button.setEnabled(available and self._can_push)
+        self.branch_button.setEnabled(available and not self._current_conflicts)
+        self.remote_button.setEnabled(available)
+        self.commit_button.setEnabled(available)
+        self.commit_push_button.setEnabled(
+            available and not self._current_conflicts and not self._current_diverged
+        )
+
     def _set_busy(self, busy: bool, message: str | None) -> None:
+        self._is_busy = busy
         if message is not None:
             self.statusBar().showMessage(message)
         self.activity_progress.setVisible(busy)
-        for button in (self.refresh_button, self.fetch_button, self.pull_button, self.push_button):
-            button.setEnabled(not busy and self.git is not None)
+        self._apply_operation_button_state()
 
     def _error(self, message: str) -> None:
         QMessageBox.critical(self, "RepoFlow", message)

@@ -113,3 +113,15 @@ After T01-T19 pass, continue with:
 - **T54 — Activity indicator:** clone/fetch/pull/push must show the status-bar activity indicator until the worker finishes.
 - **T55 — Commit-and-push label:** button text must render as `Commit and Push` with no mnemonic underscore.
 - **T56 — Application icon:** KDE launcher and RepoFlow window must use `assets/repoflow.svg`.
+
+
+## v0.3.0 Stage 3 safety smoke tests
+
+- **T57 — Sensitive-file review:** create an untracked `.env`; checking it must open Safety Review before staging. Cancel must leave it unstaged.
+- **T58 — Add risky file to `.gitignore`:** repeat T57 and choose **Add to .gitignore**. `.env` must disappear from normal untracked changes and `.gitignore` must contain `/.env`.
+- **T59 — Stage Anyway:** create another risky file such as `test-key.pem`, choose **Stage Anyway**, and verify it stages normally. Unstage it afterward unless it is intentionally part of the test repository.
+- **T60 — `.gitignore` manager:** open **Repository → Manage .gitignore…**, add a harmless test rule or preset, save, and verify `.gitignore` becomes a normal repository change.
+- **T61 — Large-file review:** create a sparse/local test file above 25 MiB; staging must show a Large file warning instead of staging silently. Remove the file after the test.
+- **T62 — Conflict safety banner:** open a repository with an externally-created unresolved merge conflict. RepoFlow must show the conflict banner and disable Pull/Push while allowing the conflict file to be staged after manual resolution.
+- **T63 — Divergence safety banner:** after Fetch produces both ahead > 0 and behind > 0, RepoFlow must show the divergence banner and disable Pull/Push while keeping Fetch available.
+- **T64 — Regression:** restart RepoFlow and confirm GitHub persistence, normal staging, commit, fetch/pull/push, branch switching, binary preview, and background progress from v0.2.8 still work.
