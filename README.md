@@ -2,8 +2,8 @@
 
 RepoFlow is a lightweight desktop Git and GitHub client designed for Linux, with KDE-friendly installation and a workflow focused on everyday repository tasks without requiring terminal commands.
 
-> Current development version: **v0.3.0**
-> v0.3.0 begins Stage 3 with pre-commit safety review, `.gitignore` management, large-file warnings, and clearer conflict/divergence protection while keeping Git as the source of truth.
+> Current development version: **v0.3.1**
+> v0.3.1 continues Stage 3 with stash management, explicit hunk staging, safer branch management, and a richer conflict-review workflow while preserving RepoFlow's non-destructive defaults.
 
 RepoFlow is currently under active development. The project is being tested incrementally before a stable release is published.
 
@@ -36,6 +36,7 @@ The application does **not** implement a separate version-control system. It ope
   - renamed;
   - conflicted files.
 - Stage and unstage files using checkboxes.
+- Stage selected text hunks explicitly with **Stage Selected Hunks…** while leaving other hunks unstaged.
 - Detect **partially staged files**.
 - Display staged and unstaged diffs separately.
 - Detect binary files and show a safe metadata preview instead of decoding raw bytes.
@@ -43,10 +44,13 @@ The application does **not** implement a separate version-control system. It ope
 - Create multiple local commits before pushing.
 - View commit history.
 - Create and switch local branches.
+- Rename local branches and safely delete merged branches without force deletion.
+- Save, apply, and drop Git stashes from **Repository → Stashes…**.
 - Warn before staging likely credential/key files and unusually large files.
 - Review risky staged files again before commit when they were staged outside RepoFlow.
 - Manage `.gitignore` from the Repository menu with optional common presets.
 - Surface unresolved conflicts and diverged histories with explicit safety banners.
+- Review conflicted files and conflict markers from RepoFlow without automatically choosing `ours` or `theirs`.
 - Block Pull/Push during unresolved conflict/divergence states without force-pushing or choosing a reconciliation strategy automatically.
 - Fetch remote changes.
 - Pull using fast-forward-only mode.
@@ -107,6 +111,22 @@ Checkbox meaning:
 ```
 
 When a partially staged file is checked, RepoFlow stages the complete current file. When it is unchecked, RepoFlow removes the file from the staging area.
+
+## Advanced Working-Tree Tools
+
+### Selected-hunk staging
+
+For a tracked text file with multiple unstaged hunks, select the file and click **Stage Selected Hunks…**. RepoFlow shows each `@@` diff hunk separately and stages only the checked hunks. Whole-file checkbox behavior is unchanged.
+
+Hunk staging is intentionally unavailable for untracked, binary, renamed, deleted, conflicted, and mode-only changes; use whole-file staging for those cases.
+
+### Stashes
+
+Open **Repository → Stashes…** to temporarily save local work. RepoFlow can include untracked files, restores staged state when applying a stash, keeps an applied stash in the list, and asks before permanently dropping one.
+
+### Branch management
+
+Open **Repository → Manage Branches…** or use the branch button menu. Rename is local-only. Delete uses Git's safe `-d` mode so Git refuses to delete work that has not been merged.
 
 ## Safety Decisions
 

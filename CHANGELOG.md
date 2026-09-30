@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.3.1
+
+- Added **Repository → Stashes…** to save working changes with an optional message and optional untracked files.
+- Added safe stash **Apply** that preserves staged state with `--index`; applying on top of existing local changes requires explicit confirmation.
+- Added stash **Drop** with a destructive-action confirmation; RepoFlow does not auto-pop or silently delete stashes.
+- Added **Stage Selected Hunks…** for tracked text modifications so individual diff hunks can be staged while other changes remain in the working tree.
+- Kept checkbox staging semantics unchanged: checking a file still stages the complete current file.
+- Restricted hunk staging away from untracked, binary, renamed, deleted, conflicted, and mode-only changes to avoid ambiguous patch behavior.
+- Added **Manage Branches…** with local branch rename and safe deletion using `git branch -d`; RepoFlow never force-deletes a branch with `-D`.
+- Added an enhanced **Review Conflicts** dialog that lists conflicted files, previews conflict markers, and can open the selected file in the desktop editor without choosing ours/theirs automatically.
+- Added regression coverage for multi-hunk partial staging, stash create/apply/drop, safe branch rename/delete, and Stage 3 Batch 2 UI safety invariants.
+
 ## v0.3.0
 
 - Added Stage 3 safety review before staging likely secret-bearing files such as `.env`, private keys, keystores, credential files, and Terraform state.

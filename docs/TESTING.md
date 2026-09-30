@@ -125,3 +125,15 @@ After T01-T19 pass, continue with:
 - **T62 — Conflict safety banner:** open a repository with an externally-created unresolved merge conflict. RepoFlow must show the conflict banner and disable Pull/Push while allowing the conflict file to be staged after manual resolution.
 - **T63 — Divergence safety banner:** after Fetch produces both ahead > 0 and behind > 0, RepoFlow must show the divergence banner and disable Pull/Push while keeping Fetch available.
 - **T64 — Regression:** restart RepoFlow and confirm GitHub persistence, normal staging, commit, fetch/pull/push, branch switching, binary preview, and background progress from v0.2.8 still work.
+
+
+## v0.3.1 Stage 3 Batch 2 smoke tests
+
+- **T65 — Create stash:** modify a tracked file and create an untracked file, then open **Repository → Stashes…** and save working changes with **Include untracked files** enabled. The working tree must become clean and one stash must appear.
+- **T66 — Apply stash:** apply the stash from T65. The tracked and untracked changes must return, staged state must be preserved when relevant, and the stash must remain listed.
+- **T67 — Drop stash:** after returning the repository to a safe state, choose **Drop Selected**. RepoFlow must ask for confirmation and remove only the selected stash after approval.
+- **T68 — Selected-hunk staging:** edit two far-apart parts of the same tracked text file so Git creates two hunks. Select the file, click **Stage Selected Hunks…**, check only one hunk, and confirm. The file must become partially staged and staged/unstaged diff sections must contain different edits.
+- **T69 — Whole-file staging regression:** on the partially staged file from T68, checking the file checkbox must still stage the complete current file; unchecking must still unstage the complete file.
+- **T70 — Rename local branch:** open **Manage Branches…**, rename a disposable local branch, and verify the branch list/header update without creating a second branch.
+- **T71 — Safe branch deletion:** delete a fully merged disposable branch successfully, then try deleting a branch containing an unmerged commit. Git/RepoFlow must refuse the unmerged deletion; no force-delete path is provided.
+- **T72 — Conflict review regression:** create a disposable conflict as in T62, open **Review Conflicts**, verify the conflicted file and markers are visible, and confirm RepoFlow does not automatically choose ours/theirs. Resolve manually, stage, and commit as before.

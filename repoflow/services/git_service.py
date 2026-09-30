@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Iterable
 from urllib.parse import urlparse
 
-from repoflow.core.models import CommitInfo, GitFile, RepoInfo
+from repoflow.core.models import CommitInfo, DiffHunk, GitFile, RepoInfo, StashInfo
 from repoflow.core.safety import SafetyIssue, SafetyScanner
 
 
@@ -376,6 +376,109 @@ esac
     def staged_diff(self, path: str) -> str:
         return self.diff(path, staged=True)
 
+    @staticmethod
+    def _split_patch_hunks(patch: str) -> tuple[str, list[str]]:
+        """Split a single-file unified diff into its file header and @@ hunks."""
+        lines = patch.splitlines(keepends=True)
+        first_hunk = next((i for i, line in enumerate(lines) if line.startswith("@@ ")), None)
+        if first_hunk is None:
+            return patch, []
+        preamble = "".join(lines[:first_hunk])
+        chunks: list[str] = []
+        start = first_hunk
+        for index in range(first_hunk + 1, len(lines)):
+            if lines[index].startswith("@@ "):
+                chunks.append("".join(lines[start:index]))
+                start = index
+        chunks.append("".join(lines[start:]))
+        return preamble, chunks
+
+    def unstaged_hunks(self, path: str) -> list[DiffHunk]:
+        entry = next((item for item in self.status() if item.path == path), None)
+        if not entry or not entry.unstaged or entry.untracked or entry.conflicted:
+            return []
+        if entry.original_path or entry.kind.value != "Modified":
+            return []
+        result = self._run(
+            ["diff", "--no-ext-diff", "--no-color", "--unified=3", "--", path],
+            check=False,
+        )
+        patch = result.stdout
+        if not patch or "Binary files " in patch or "GIT binary patch" in patch:
+            return []
+        preamble, chunks = self._split_patch_hunks(patch)
+        if not chunks or "old mode " in preamble or "new mode " in preamble:
+            return []
+        hunks: list[DiffHunk] = []
+        for chunk in chunks:
+            lines = chunk.splitlines()
+            header = lines[0] if lines else "@@"
+            body = "\n".join(lines[1:])
+            hunks.append(DiffHunk(header=header, body=body))
+        return hunks
+
+    def stage_hunks(self, path: str, hunk_indexes: Iterable[int]) -> None:
+        selected = sorted(set(int(index) for index in hunk_indexes))
+        if not selected:
+            raise GitError("Select at least one hunk to stage.")
+        result = self._run(
+            ["diff", "--no-ext-diff", "--no-color", "--unified=3", "--", path],
+            check=False,
+        )
+        patch = result.stdout
+        if not patch or "Binary files " in patch or "GIT binary patch" in patch:
+            raise GitError("Selected file does not have a text diff that can be staged by hunk.")
+        preamble, chunks = self._split_patch_hunks(patch)
+        if not chunks or "old mode " in preamble or "new mode " in preamble:
+            raise GitError("This change type is not supported by hunk staging. Stage the complete file instead.")
+        if any(index < 0 or index >= len(chunks) for index in selected):
+            raise GitError("The file changed while the hunk selection was open. Refresh and try again.")
+        partial_patch = preamble + "".join(chunks[index] for index in selected)
+        self._run(
+            ["apply", "--cached", "--whitespace=nowarn", "-"],
+            input_text=partial_patch,
+        )
+
+    def stash_list(self) -> list[StashInfo]:
+        fmt = "%gd%x1f%gs%x1f%cr%x1e"
+        result = self._run(["stash", "list", f"--format={fmt}"], check=False)
+        if result.returncode != 0:
+            return []
+        stashes: list[StashInfo] = []
+        for record in result.stdout.split("\x1e"):
+            record = record.strip("\n")
+            if not record:
+                continue
+            parts = record.split("\x1f")
+            if len(parts) == 3:
+                stashes.append(StashInfo(*parts))
+        return stashes
+
+    def stash_create(self, message: str = "", *, include_untracked: bool = True) -> str:
+        if not self.status():
+            return "No local changes to stash."
+        args = ["stash", "push"]
+        if include_untracked:
+            args.append("--include-untracked")
+        label = message.strip() or "RepoFlow stash"
+        args.extend(["-m", label])
+        result = self._run(args)
+        return (result.stdout or result.stderr).strip() or "Working changes stashed."
+
+    def stash_apply(self, ref: str) -> str:
+        refs = {stash.ref for stash in self.stash_list()}
+        if ref not in refs:
+            raise GitError(f"Stash '{ref}' no longer exists. Refresh the stash list.")
+        result = self._run(["stash", "apply", "--index", ref])
+        return (result.stdout or result.stderr).strip() or f"Applied {ref}."
+
+    def stash_drop(self, ref: str) -> str:
+        refs = {stash.ref for stash in self.stash_list()}
+        if ref not in refs:
+            raise GitError(f"Stash '{ref}' no longer exists. Refresh the stash list.")
+        result = self._run(["stash", "drop", ref])
+        return (result.stdout or result.stderr).strip() or f"Dropped {ref}."
+
     def commit(self, message: str) -> str:
         message = message.strip()
         if not message:
@@ -481,3 +584,25 @@ esac
         active = self.branch()
         if active != name:
             raise GitError(f"Could not switch to branch '{name}'. Active branch: {active}")
+
+    def rename_branch(self, old_name: str, new_name: str) -> None:
+        old_name = old_name.strip()
+        new_name = self.validate_branch_name(new_name)
+        branches = self.local_branches()
+        if old_name not in branches:
+            raise GitError(f"Local branch '{old_name}' does not exist.")
+        if new_name in branches:
+            raise GitError(f"Branch '{new_name}' already exists.")
+        if self.branch() == old_name:
+            self._run(["branch", "-m", new_name])
+        else:
+            self._run(["branch", "-m", old_name, new_name])
+
+    def delete_branch(self, name: str) -> None:
+        name = self.validate_branch_name(name)
+        if name == self.branch():
+            raise GitError("The active branch cannot be deleted. Switch to another branch first.")
+        if name not in self.local_branches():
+            raise GitError(f"Local branch '{name}' does not exist.")
+        # Deliberately use -d, never -D. Git refuses to delete an unmerged branch.
+        self._run(["branch", "-d", name])

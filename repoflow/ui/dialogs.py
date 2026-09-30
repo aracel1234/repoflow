@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from repoflow.core.models import GitHubRepository, GitHubUser
+from repoflow.core.models import DiffHunk, GitHubRepository, GitHubUser, StashInfo
 from repoflow.core.safety import SafetyIssue, SafetyScanner
 
 
@@ -540,3 +540,279 @@ class RepositorySafetyDialog(QDialog):
         layout.addWidget(body_label)
         layout.addSpacing(8)
         layout.addLayout(row)
+
+
+class HunkStageDialog(QDialog):
+    def __init__(self, path: str, hunks: list[DiffHunk], parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setWindowTitle("Stage Selected Hunks")
+        self.resize(900, 620)
+        self._hunks = hunks
+
+        title = QLabel(f"Stage parts of {path}")
+        title.setObjectName("title")
+        note = QLabel(
+            "Select only the hunks you want in the next commit. Unselected hunks stay in the working tree. "
+            "RepoFlow enables this only for tracked text modifications."
+        )
+        note.setObjectName("muted")
+        note.setWordWrap(True)
+
+        self.list = QListWidget()
+        for index, hunk in enumerate(hunks):
+            item = QListWidgetItem(f"Hunk {index + 1}   {hunk.header}")
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Unchecked)
+            item.setData(Qt.UserRole, index)
+            self.list.addItem(item)
+        self.list.currentRowChanged.connect(self._show_hunk)
+
+        self.preview = QPlainTextEdit()
+        self.preview.setReadOnly(True)
+        self.preview.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self.preview.setObjectName("diffView")
+
+        splitter = QHBoxLayout()
+        splitter.addWidget(self.list, 1)
+        splitter.addWidget(self.preview, 2)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Cancel | QDialogButtonBox.Ok)
+        buttons.button(QDialogButtonBox.Ok).setText("Stage Selected Hunks")
+        buttons.accepted.connect(self._accept_if_selected)
+        buttons.rejected.connect(self.reject)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(title)
+        layout.addWidget(note)
+        layout.addLayout(splitter, 1)
+        layout.addWidget(buttons)
+        if hunks:
+            self.list.setCurrentRow(0)
+
+    def _show_hunk(self, row: int) -> None:
+        if 0 <= row < len(self._hunks):
+            self.preview.setPlainText(self._hunks[row].preview)
+        else:
+            self.preview.clear()
+
+    def selected_indexes(self) -> list[int]:
+        result: list[int] = []
+        for row in range(self.list.count()):
+            item = self.list.item(row)
+            if item.checkState() == Qt.Checked:
+                result.append(int(item.data(Qt.UserRole)))
+        return result
+
+    def _accept_if_selected(self) -> None:
+        if self.selected_indexes():
+            self.accept()
+
+
+class StashManagerDialog(QDialog):
+    def __init__(self, stashes: list[StashInfo], parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setWindowTitle("Stashes")
+        self.resize(720, 520)
+        self.action = ""
+
+        title = QLabel("Temporarily save working changes")
+        title.setObjectName("title")
+        note = QLabel(
+            "Creating a stash leaves the branch clean. Applying restores the stash but keeps it in the list. "
+            "Drop permanently removes the selected stash and always requires confirmation."
+        )
+        note.setObjectName("muted")
+        note.setWordWrap(True)
+
+        self.message_edit = QLineEdit()
+        self.message_edit.setPlaceholderText("Optional stash message")
+        self.include_untracked_check = QCheckBox("Include untracked files")
+        self.include_untracked_check.setChecked(True)
+        save_button = QPushButton("Save Working Changes")
+        save_button.setObjectName("primary")
+        save_button.clicked.connect(lambda: self._choose("create"))
+
+        create_row = QHBoxLayout()
+        create_row.addWidget(self.message_edit, 1)
+        create_row.addWidget(self.include_untracked_check)
+        create_row.addWidget(save_button)
+
+        self.list = QListWidget()
+        for stash in stashes:
+            item = QListWidgetItem(f"{stash.ref}   {stash.subject}\n{stash.relative_date}")
+            item.setData(Qt.UserRole, stash.ref)
+            self.list.addItem(item)
+        if not stashes:
+            empty = QListWidgetItem("No stashes yet.")
+            empty.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.list.addItem(empty)
+
+        apply_button = QPushButton("Apply Selected")
+        apply_button.clicked.connect(lambda: self._choose("apply"))
+        drop_button = QPushButton("Drop Selected")
+        drop_button.setObjectName("dangerAction")
+        drop_button.clicked.connect(lambda: self._choose("drop"))
+        close_button = QPushButton("Close")
+        close_button.clicked.connect(self.reject)
+
+        row = QHBoxLayout()
+        row.addWidget(apply_button)
+        row.addWidget(drop_button)
+        row.addStretch(1)
+        row.addWidget(close_button)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(title)
+        layout.addWidget(note)
+        layout.addLayout(create_row)
+        layout.addWidget(self.list, 1)
+        layout.addLayout(row)
+
+    def _choose(self, action: str) -> None:
+        if action in {"apply", "drop"} and not self.selected_ref():
+            return
+        self.action = action
+        self.accept()
+
+    def selected_ref(self) -> str | None:
+        item = self.list.currentItem()
+        value = item.data(Qt.UserRole) if item else None
+        return str(value) if value else None
+
+    def message(self) -> str:
+        return self.message_edit.text().strip()
+
+    def include_untracked(self) -> bool:
+        return self.include_untracked_check.isChecked()
+
+
+class BranchManagerDialog(QDialog):
+    def __init__(self, branches: list[str], current: str, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setWindowTitle("Manage Branches")
+        self.resize(560, 460)
+        self.action = ""
+
+        title = QLabel("Local branches")
+        title.setObjectName("title")
+        note = QLabel(
+            "Rename updates only the local branch name. Delete uses Git's safe -d mode, so an unmerged branch is refused instead of force-deleted."
+        )
+        note.setObjectName("muted")
+        note.setWordWrap(True)
+
+        self.list = QListWidget()
+        for branch in branches:
+            label = f"✓ {branch}" if branch == current else branch
+            item = QListWidgetItem(label)
+            item.setData(Qt.UserRole, branch)
+            self.list.addItem(item)
+        for index in range(self.list.count()):
+            if self.list.item(index).data(Qt.UserRole) == current:
+                self.list.setCurrentRow(index)
+                break
+
+        rename = QPushButton("Rename Selected")
+        rename.clicked.connect(lambda: self._choose("rename"))
+        delete = QPushButton("Delete Selected")
+        delete.setObjectName("dangerAction")
+        delete.clicked.connect(lambda: self._choose("delete"))
+        close = QPushButton("Close")
+        close.clicked.connect(self.reject)
+
+        row = QHBoxLayout()
+        row.addWidget(rename)
+        row.addWidget(delete)
+        row.addStretch(1)
+        row.addWidget(close)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(title)
+        layout.addWidget(note)
+        layout.addWidget(self.list, 1)
+        layout.addLayout(row)
+
+    def selected_branch(self) -> str | None:
+        item = self.list.currentItem()
+        value = item.data(Qt.UserRole) if item else None
+        return str(value) if value else None
+
+    def _choose(self, action: str) -> None:
+        if not self.selected_branch():
+            return
+        self.action = action
+        self.accept()
+
+
+class ConflictReviewDialog(QDialog):
+    def __init__(self, repo_root: str, paths: list[str], parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setWindowTitle("Review Conflicts")
+        self.resize(920, 620)
+        self._root = Path(repo_root)
+        self._paths = paths
+
+        title = QLabel("Unresolved conflict files")
+        title.setObjectName("title")
+        note = QLabel(
+            "RepoFlow does not choose a side automatically. Inspect the conflict markers, edit the file in your preferred editor, then stage it when resolved."
+        )
+        note.setObjectName("muted")
+        note.setWordWrap(True)
+
+        self.list = QListWidget()
+        for path in paths:
+            item = QListWidgetItem(path)
+            item.setData(Qt.UserRole, path)
+            self.list.addItem(item)
+        self.list.currentRowChanged.connect(self._show_path)
+
+        self.preview = QPlainTextEdit()
+        self.preview.setReadOnly(True)
+        self.preview.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self.preview.setObjectName("diffView")
+
+        open_button = QPushButton("Open Selected File")
+        open_button.clicked.connect(self._open_selected)
+        close = QPushButton("Close")
+        close.clicked.connect(self.accept)
+        row = QHBoxLayout()
+        row.addWidget(open_button)
+        row.addStretch(1)
+        row.addWidget(close)
+
+        body = QHBoxLayout()
+        body.addWidget(self.list, 1)
+        body.addWidget(self.preview, 2)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(title)
+        layout.addWidget(note)
+        layout.addLayout(body, 1)
+        layout.addLayout(row)
+        if paths:
+            self.list.setCurrentRow(0)
+
+    def _selected_path(self) -> Path | None:
+        item = self.list.currentItem()
+        rel = item.data(Qt.UserRole) if item else None
+        return self._root / str(rel) if rel else None
+
+    def _show_path(self, _row: int) -> None:
+        path = self._selected_path()
+        if not path:
+            self.preview.clear()
+            return
+        try:
+            raw = path.read_bytes()
+            if len(raw) > 512 * 1024:
+                self.preview.setPlainText("File is larger than 512 KiB. Open it in an external editor to resolve the conflict.")
+                return
+            self.preview.setPlainText(raw.decode("utf-8", errors="replace"))
+        except OSError as exc:
+            self.preview.setPlainText(f"Could not read file: {exc}")
+
+    def _open_selected(self) -> None:
+        path = self._selected_path()
+        if path and path.exists():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))

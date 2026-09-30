@@ -98,6 +98,23 @@ class CommitInfo:
 
 
 @dataclass(slots=True)
+class StashInfo:
+    ref: str
+    subject: str
+    relative_date: str
+
+
+@dataclass(slots=True)
+class DiffHunk:
+    header: str
+    body: str
+
+    @property
+    def preview(self) -> str:
+        return f"{self.header}\n{self.body}".strip()
+
+
+@dataclass(slots=True)
 class GitHubUser:
     login: str
     name: str | None

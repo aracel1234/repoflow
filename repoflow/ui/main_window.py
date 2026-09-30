@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QInputDialog,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
@@ -40,15 +41,19 @@ logger = logging.getLogger(__name__)
 
 from repoflow.ui.dialogs import (
     BranchDialog,
+    BranchManagerDialog,
     CloneDialog,
+    ConflictReviewDialog,
     CreateGitHubRepositoryDialog,
     GitHubAccountDialog,
     GitHubRepositoriesDialog,
     GitHubTokenDialog,
     GitIgnoreDialog,
+    HunkStageDialog,
     RemoteDialog,
     RepositorySafetyDialog,
     SafetyWarningDialog,
+    StashManagerDialog,
 )
 
 
@@ -83,6 +88,7 @@ class MainWindow(QMainWindow):
         self._can_pull = False
         self._can_push = False
         self._is_busy = False
+        self._hunk_available = False
 
         self._build_ui()
         self._build_menu()
@@ -236,6 +242,15 @@ class MainWindow(QMainWindow):
 
         self.stage_legend = QLabel("Checkbox: ☐ unstaged   ☑ staged   ◩ partially staged")
         self.stage_legend.setObjectName("muted")
+        stage_tools = QHBoxLayout()
+        stage_tools.setContentsMargins(0, 0, 0, 0)
+        stage_tools.addWidget(self.stage_legend)
+        stage_tools.addStretch(1)
+        self.hunk_button = QPushButton("Stage Selected Hunks…")
+        self.hunk_button.setToolTip("Stage only selected text hunks from the currently selected tracked file.")
+        self.hunk_button.setEnabled(False)
+        self.hunk_button.clicked.connect(self.stage_selected_hunks)
+        stage_tools.addWidget(self.hunk_button)
 
         splitter = QSplitter(Qt.Horizontal)
         self.change_tree = QTreeWidget()
@@ -273,7 +288,7 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(self.sync_label)
         layout.addLayout(safety_row)
-        layout.addWidget(self.stage_legend)
+        layout.addLayout(stage_tools)
         layout.addWidget(splitter, 1)
         layout.addWidget(commit_panel)
         return page
@@ -300,7 +315,13 @@ class MainWindow(QMainWindow):
         repo_menu.addSeparator()
         gitignore_action = QAction("Manage .gitignore…", self)
         gitignore_action.triggered.connect(self.manage_gitignore)
+        stash_action = QAction("Stashes…", self)
+        stash_action.triggered.connect(self.manage_stashes)
+        branch_manager_action = QAction("Manage Branches…", self)
+        branch_manager_action.triggered.connect(self.manage_branches)
         repo_menu.addAction(gitignore_action)
+        repo_menu.addAction(stash_action)
+        repo_menu.addAction(branch_manager_action)
         repo_menu.addSeparator()
         quit_action = QAction("Quit", self)
         quit_action.triggered.connect(self.close)
@@ -606,6 +627,105 @@ class MainWindow(QMainWindow):
         except GitError as exc:
             self._error(str(exc))
 
+    def manage_stashes(self) -> None:
+        if not self.git:
+            self._error("Open a repository before managing stashes.")
+            return
+        if self._current_conflicts:
+            self._error("Resolve merge conflicts before creating or applying stashes.")
+            return
+        try:
+            dialog = StashManagerDialog(self.git.stash_list(), self)
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            if dialog.action == "create":
+                message = self.git.stash_create(
+                    dialog.message(),
+                    include_untracked=dialog.include_untracked(),
+                )
+                self.refresh_all()
+                self.statusBar().showMessage(message.splitlines()[0] if message else "Working changes stashed.", 5500)
+                return
+            ref = dialog.selected_ref()
+            if not ref:
+                return
+            if dialog.action == "apply":
+                if self.git.status():
+                    answer = QMessageBox.question(
+                        self,
+                        "Apply Stash",
+                        "This repository already has local changes. Applying a stash on top of them can create conflicts. Continue?",
+                    )
+                    if answer != QMessageBox.Yes:
+                        return
+                try:
+                    message = self.git.stash_apply(ref)
+                except GitError:
+                    self.refresh_all()
+                    raise
+                self.refresh_all()
+                self.statusBar().showMessage(message.splitlines()[0] if message else f"Applied {ref}.", 5500)
+                return
+            if dialog.action == "drop":
+                answer = QMessageBox.warning(
+                    self,
+                    "Drop Stash",
+                    f"Permanently remove {ref}? This cannot be undone by RepoFlow.",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No,
+                )
+                if answer != QMessageBox.Yes:
+                    return
+                message = self.git.stash_drop(ref)
+                self.statusBar().showMessage(message.splitlines()[0] if message else f"Dropped {ref}.", 5500)
+        except GitError as exc:
+            self._error(str(exc))
+
+    def manage_branches(self) -> None:
+        if not self.git:
+            self._error("Open a repository before managing branches.")
+            return
+        if self._current_conflicts:
+            self._error("Resolve merge conflicts before renaming or deleting branches.")
+            return
+        try:
+            current = self.git.branch()
+            dialog = BranchManagerDialog(self.git.local_branches(), current, self)
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            branch = dialog.selected_branch()
+            if not branch:
+                return
+            if dialog.action == "rename":
+                new_name, ok = QInputDialog.getText(
+                    self,
+                    "Rename Branch",
+                    f"New name for '{branch}':",
+                    text=branch,
+                )
+                if not ok or not new_name.strip() or new_name.strip() == branch:
+                    return
+                self.git.rename_branch(branch, new_name.strip())
+                self.refresh_all()
+                self.statusBar().showMessage(f"Renamed branch '{branch}' to '{new_name.strip()}'.", 5000)
+                return
+            if dialog.action == "delete":
+                if branch == current:
+                    self._error("The active branch cannot be deleted. Switch to another branch first.")
+                    return
+                answer = QMessageBox.question(
+                    self,
+                    "Delete Local Branch",
+                    f"Delete local branch '{branch}'? RepoFlow uses Git's safe delete mode and will refuse if the branch is not fully merged.",
+                )
+                if answer != QMessageBox.Yes:
+                    return
+                self.git.delete_branch(branch)
+                self.refresh_all()
+                self.statusBar().showMessage(f"Deleted local branch '{branch}'.", 5000)
+        except GitError as exc:
+            self._error(str(exc))
+
     def _show_repository_safety(self) -> None:
         if not self.git:
             return
@@ -625,7 +745,7 @@ class MainWindow(QMainWindow):
                 "Edit each file to resolve the conflict markers, then stage the resolved file with its checkbox. "
                 "When no Conflict rows remain, create the appropriate commit and refresh."
             )
-            RepositorySafetyDialog("Resolve Conflicts", "Unresolved conflicts", body, self).exec()
+            ConflictReviewDialog(info.root, [entry.path for entry in self._current_conflicts], self).exec()
             return
 
         if self._current_diverged:
@@ -717,6 +837,8 @@ class MainWindow(QMainWindow):
         self._current_conflicts = []
         self._current_diverged = False
         self._can_fetch = self._can_pull = self._can_push = False
+        self._hunk_available = False
+        self.hunk_button.setEnabled(False)
         for button in (
             self.branch_button,
             self.refresh_button,
@@ -798,8 +920,12 @@ class MainWindow(QMainWindow):
             current = self.file_rows[current_path]
             self._file_selected(current, None)
         elif not files:
+            self._hunk_available = False
+            self.hunk_button.setEnabled(False)
             self.diff_view.setPlainText("Working tree clean. Nothing to commit.")
-        elif not current_path:
+        else:
+            self._hunk_available = False
+            self.hunk_button.setEnabled(False)
             self.diff_view.clear()
 
     # ---------- Staging / diff / commit ----------
@@ -886,8 +1012,13 @@ class MainWindow(QMainWindow):
         try:
             entry = self._status_entry_for_path(path)
             if not entry:
+                self._hunk_available = False
+                self.hunk_button.setEnabled(False)
                 self.diff_view.setPlainText("This file no longer has pending changes.")
                 return
+
+            self._hunk_available = bool(self.git.unstaged_hunks(path))
+            self.hunk_button.setEnabled(self._hunk_available and not self._is_busy)
 
             if entry.partially_staged:
                 staged = self.git.staged_diff(path)
@@ -915,6 +1046,42 @@ class MainWindow(QMainWindow):
             self.diff_view.setPlainText(content)
         except GitError as exc:
             self.diff_view.setPlainText(str(exc))
+
+    def stage_selected_hunks(self) -> None:
+        if not self.git:
+            return
+        item = self.change_tree.currentItem()
+        path = item.data(self.COL_PATH, Qt.UserRole) if item else None
+        if not path:
+            return
+        try:
+            entry = self._status_entry_for_path(path)
+            if not entry:
+                self._error("The selected file no longer has pending changes.")
+                return
+            hunks = self.git.unstaged_hunks(path)
+            if not hunks:
+                self._error("Hunk staging is available only for tracked text modifications with unstaged hunks.")
+                return
+            if path not in self._safety_acknowledged_paths and entry.kind != FileKind.DELETED:
+                issues = self.git.safety_issues([path])
+                if issues:
+                    warning = SafetyWarningDialog(issues, context="stage", allow_ignore=False, parent=self)
+                    if warning.exec() != QDialog.DialogCode.Accepted or warning.action != "continue":
+                        return
+                    self._safety_acknowledged_paths.add(path)
+            dialog = HunkStageDialog(path, hunks, self)
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            selected = dialog.selected_indexes()
+            self.git.stage_hunks(path, selected)
+            self.refresh_all()
+            self.statusBar().showMessage(
+                f"Staged {len(selected)} selected hunk(s) from {path}.",
+                5000,
+            )
+        except GitError as exc:
+            self._error(str(exc))
 
     def commit(self, push_after: bool = False) -> None:
         if not self.git:
@@ -1078,8 +1245,12 @@ class MainWindow(QMainWindow):
             action.setData(branch)
         menu.addSeparator()
         new_action = menu.addAction("+ New Branch")
+        manage_action = menu.addAction("Manage Branches…")
         chosen = menu.exec(self.branch_button.mapToGlobal(self.branch_button.rect().bottomLeft()))
         if not chosen:
+            return
+        if chosen == manage_action:
+            self.manage_branches()
             return
         if chosen == new_action:
             dialog = BranchDialog(self)
@@ -1177,6 +1348,7 @@ class MainWindow(QMainWindow):
         self.commit_push_button.setEnabled(
             available and not self._current_conflicts and not self._current_diverged
         )
+        self.hunk_button.setEnabled(available and self._hunk_available)
 
     def _set_busy(self, busy: bool, message: str | None) -> None:
         self._is_busy = busy
