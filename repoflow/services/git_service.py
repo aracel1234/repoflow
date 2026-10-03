@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Iterable
 from urllib.parse import urlparse
 
-from repoflow.core.models import CommitInfo, DiffHunk, GitFile, RepoInfo, StashInfo
+from repoflow.core.models import CommitDetail, CommitInfo, DiffHunk, GitFile, RemoteBranchInfo, RepoInfo, StashInfo, TagInfo
 from repoflow.core.safety import SafetyIssue, SafetyScanner
 
 
@@ -532,9 +532,12 @@ esac
         result = self._run(["pull", "--ff-only"], env_extra=env)
         return (result.stdout or result.stderr).strip() or "Pull completed."
 
-    def history(self, limit: int = 100) -> list[CommitInfo]:
+    def history(self, limit: int = 100, *, all_local_branches: bool = False) -> list[CommitInfo]:
         fmt = "%H%x1f%h%x1f%s%x1f%an%x1f%ar%x1e"
-        result = self._run(["log", f"--max-count={limit}", f"--pretty=format:{fmt}"], check=False)
+        args = ["log", f"--max-count={limit}", f"--pretty=format:{fmt}"]
+        if all_local_branches:
+            args.append("--branches")
+        result = self._run(args, check=False)
         if result.returncode != 0:
             return []
         commits: list[CommitInfo] = []
@@ -546,6 +549,202 @@ esac
             if len(parts) == 5:
                 commits.append(CommitInfo(*parts))
         return commits
+
+    def commit_detail(self, sha: str) -> CommitDetail:
+        sha = sha.strip()
+        if not sha:
+            raise GitError("Commit SHA is required.")
+        fmt = "%H%x1f%h%x1f%s%x1f%b%x1f%an%x1f%ae%x1f%aI"
+        meta = self._run(["show", "-s", f"--format={fmt}", sha], check=False)
+        if meta.returncode != 0:
+            raise GitError((meta.stderr or meta.stdout).strip() or f"Commit '{sha}' was not found.")
+        parts = meta.stdout.rstrip("\n").split("\x1f")
+        if len(parts) != 7:
+            raise GitError(f"Could not parse commit metadata for '{sha}'.")
+        parent_line = self._run(["rev-list", "--parents", "-n", "1", sha]).stdout.strip().split()
+        parent_count = max(0, len(parent_line) - 1)
+        names = self._run(["diff-tree", "--no-commit-id", "--name-status", "-r", "--root", sha]).stdout
+        files = [line.rstrip() for line in names.splitlines() if line.strip()]
+        patch = self._run(
+            ["show", "--format=fuller", "--stat", "--patch", "--no-ext-diff", "--find-renames", sha]
+        ).stdout
+        return CommitDetail(
+            sha=parts[0],
+            short_sha=parts[1],
+            subject=parts[2],
+            body=parts[3].strip(),
+            author=parts[4],
+            author_email=parts[5],
+            authored_at=parts[6],
+            parent_count=parent_count,
+            files=files,
+            patch=patch,
+        )
+
+    def working_tree_clean(self) -> bool:
+        return not bool(self._run(["status", "--porcelain=v1", "--untracked-files=all"]).stdout.strip())
+
+    def operation_state(self) -> str | None:
+        checks = (
+            ("CHERRY_PICK_HEAD", "cherry-pick"),
+            ("REVERT_HEAD", "revert"),
+            ("MERGE_HEAD", "merge"),
+        )
+        for git_path, name in checks:
+            resolved = self._run(["rev-parse", "--git-path", git_path], check=False).stdout.strip()
+            if not resolved:
+                continue
+            candidate = Path(resolved)
+            if not candidate.is_absolute():
+                candidate = Path(self.repo_path or ".") / candidate
+            if candidate.exists():
+                return name
+        return None
+
+    def _require_clean_recovery_state(self) -> None:
+        operation = self.operation_state()
+        if operation:
+            raise GitError(
+                f"A {operation} operation is already in progress. Resolve or abort it before starting another history operation."
+            )
+        if not self.working_tree_clean():
+            raise GitError("Commit recovery operations require a clean working tree. Commit or stash local changes first.")
+
+    def revert_commit(self, sha: str) -> str:
+        self._require_clean_recovery_state()
+        detail = self.commit_detail(sha)
+        if detail.parent_count > 1:
+            raise GitError(
+                "RepoFlow will not automatically revert a merge commit because Git requires an explicit mainline parent choice."
+            )
+        result = self._run(["revert", "--no-edit", detail.sha], check=False)
+        if result.returncode != 0:
+            if self.conflicted_files() or self.operation_state() == "revert":
+                raise GitError(
+                    "Revert paused because conflicts need resolution. RepoFlow preserved the in-progress revert; "
+                    "resolve and stage the files, then commit, or use Abort Current Git Operation.",
+                    ["git", "revert", "--no-edit", detail.sha],
+                    result.stderr,
+                )
+            raise GitError((result.stderr or result.stdout).strip() or "Revert failed.")
+        return (result.stdout or result.stderr).strip() or f"Reverted {detail.short_sha}."
+
+    def cherry_pick_commit(self, sha: str) -> str:
+        self._require_clean_recovery_state()
+        detail = self.commit_detail(sha)
+        result = self._run(["cherry-pick", detail.sha], check=False)
+        if result.returncode != 0:
+            if self.conflicted_files() or self.operation_state() == "cherry-pick":
+                raise GitError(
+                    "Cherry-pick paused because conflicts need resolution. RepoFlow preserved the in-progress cherry-pick; "
+                    "resolve and stage the files, then continue with a commit, or use Abort Current Git Operation.",
+                    ["git", "cherry-pick", detail.sha],
+                    result.stderr,
+                )
+            raise GitError((result.stderr or result.stdout).strip() or "Cherry-pick failed.")
+        return (result.stdout or result.stderr).strip() or f"Cherry-picked {detail.short_sha}."
+
+    def abort_current_operation(self) -> str:
+        state = self.operation_state()
+        if not state:
+            raise GitError("There is no merge, cherry-pick, or revert operation to abort.")
+        args = {
+            "merge": ["merge", "--abort"],
+            "cherry-pick": ["cherry-pick", "--abort"],
+            "revert": ["revert", "--abort"],
+        }[state]
+        result = self._run(args)
+        return (result.stdout or result.stderr).strip() or f"Aborted {state}."
+
+    def remote_branches(self) -> list[RemoteBranchInfo]:
+        fmt = "%(refname:short)%00%(objectname:short)%00%(subject)"
+        out = self._run(["for-each-ref", f"--format={fmt}", "refs/remotes/"]).stdout
+        branches: list[RemoteBranchInfo] = []
+        for line in out.splitlines():
+            parts = line.split("\x00")
+            if len(parts) != 3:
+                continue
+            name = parts[0].strip()
+            if not name or name.endswith("/HEAD"):
+                continue
+            branches.append(RemoteBranchInfo(name=name, short_sha=parts[1].strip(), subject=parts[2].strip()))
+        return branches
+
+    def create_tracking_branch(self, remote_branch: str, local_name: str | None = None) -> None:
+        remote_branch = remote_branch.strip()
+        known = {item.name for item in self.remote_branches()}
+        if remote_branch not in known:
+            raise GitError(f"Remote branch '{remote_branch}' does not exist in the local remote refs. Fetch first.")
+        suggested = remote_branch.split("/", 1)[1] if "/" in remote_branch else remote_branch
+        local = self.validate_branch_name(local_name.strip() if local_name else suggested)
+        if local in self.local_branches():
+            raise GitError(f"Local branch '{local}' already exists.")
+        self._run(["switch", "-c", local, "--track", remote_branch])
+
+    def tags(self) -> list[TagInfo]:
+        fmt = "%(refname:short)%00%(objectname:short)%00%(creatordate:relative)%00%(subject)"
+        out = self._run(["for-each-ref", "--sort=-creatordate", f"--format={fmt}", "refs/tags/"]).stdout
+        result: list[TagInfo] = []
+        for line in out.splitlines():
+            parts = line.split("\x00")
+            if len(parts) == 4:
+                result.append(TagInfo(parts[0].strip(), parts[1].strip(), parts[2].strip(), parts[3].strip()))
+        return result
+
+    def validate_tag_name(self, name: str) -> str:
+        name = name.strip()
+        if not name:
+            raise GitError("Tag name cannot be empty.")
+        check = self._run(["check-ref-format", f"refs/tags/{name}"], check=False)
+        if check.returncode != 0:
+            raise GitError((check.stderr or check.stdout).strip() or f"Invalid tag name: {name}")
+        return name
+
+    def create_annotated_tag(self, name: str, message: str, target: str = "HEAD") -> None:
+        name = self.validate_tag_name(name)
+        if name in {item.name for item in self.tags()}:
+            raise GitError(f"Tag '{name}' already exists.")
+        message = message.strip() or name
+        self._run(["tag", "-a", name, "-m", message, target])
+
+    def delete_tag(self, name: str) -> None:
+        name = self.validate_tag_name(name)
+        if name not in {item.name for item in self.tags()}:
+            raise GitError(f"Local tag '{name}' does not exist.")
+        self._run(["tag", "-d", name])
+
+    def push_tag(self, name: str, *, token: str | None = None, username: str | None = None) -> str:
+        name = self.validate_tag_name(name)
+        info = self.repo_info()
+        if not info.remote_name:
+            raise GitError("This repository does not have a remote yet.")
+        if name not in {item.name for item in self.tags()}:
+            raise GitError(f"Local tag '{name}' does not exist.")
+        env = self._auth_env(token, username, info.remote_url)
+        result = self._run(["push", info.remote_name, f"refs/tags/{name}"], env_extra=env)
+        return (result.stderr or result.stdout).strip() or f"Pushed tag {name}."
+
+    def sync_commit_lists(self, limit: int = 100) -> tuple[list[CommitInfo], list[CommitInfo]]:
+        upstream = self.upstream()
+        if not upstream:
+            return ([], [])
+        fmt = "%H%x1f%h%x1f%s%x1f%an%x1f%ar%x1e"
+
+        def parse(range_expr: str) -> list[CommitInfo]:
+            result = self._run(["log", f"--max-count={limit}", f"--pretty=format:{fmt}", range_expr], check=False)
+            if result.returncode != 0:
+                return []
+            commits: list[CommitInfo] = []
+            for record in result.stdout.split("\x1e"):
+                record = record.strip("\n")
+                if not record:
+                    continue
+                parts = record.split("\x1f")
+                if len(parts) == 5:
+                    commits.append(CommitInfo(*parts))
+            return commits
+
+        return (parse(f"{upstream}..HEAD"), parse(f"HEAD..{upstream}"))
 
     def local_branches(self) -> list[str]:
         out = self._run(["for-each-ref", "--format=%(refname:short)", "refs/heads/"]).stdout

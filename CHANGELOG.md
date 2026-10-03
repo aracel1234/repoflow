@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.3.2
+
+- Expanded the **History** tab with commit metadata, changed paths, full patch inspection, and an optional **All local branches** view for selecting commits outside the active branch.
+- Added **Copy Hash** and **Open on GitHub** actions for selected commits.
+- Added non-destructive **Revert Commit…** using `git revert --no-edit`; merge commits are refused because RepoFlow does not guess the mainline parent.
+- Added **Cherry-pick Commit…** with clean-working-tree guards, preserved conflict state, and no automatic conflict choice.
+- Added **Repository → Abort Current Git Operation…** for merge/cherry-pick/revert states.
+- Added **Remote Branches…** to browse fetched remote refs and create an explicit local tracking branch.
+- Added **Tags…** for annotated local tag creation, explicit tag push, and local-only tag deletion; RepoFlow never deletes a remote tag automatically.
+- Added **Sync Details…** to show commits only on the current branch versus only on its upstream.
+- Extended sync/branch guards so Pull, Push, branch switching, hunk staging, stash/branch management, and history recovery cannot start while another Git operation is in progress.
+- Added regression coverage for commit detail, revert, cherry-pick conflict/abort, tracking branches, tag publishing/local deletion, sync commit lists, and Stage 3 Batch 3 UI safety invariants.
+
 ## v0.3.1
 
 - Added **Repository → Stashes…** to save working changes with an optional message and optional untracked files.

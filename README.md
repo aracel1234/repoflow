@@ -2,8 +2,8 @@
 
 RepoFlow is a lightweight desktop Git and GitHub client designed for Linux, with KDE-friendly installation and a workflow focused on everyday repository tasks without requiring terminal commands.
 
-> Current development version: **v0.3.1**
-> v0.3.1 continues Stage 3 with stash management, explicit hunk staging, safer branch management, and a richer conflict-review workflow while preserving RepoFlow's non-destructive defaults.
+> Current development version: **v0.3.2**
+> v0.3.2 adds history inspection and recovery tools: commit details, non-destructive revert/cherry-pick workflows, remote branch tracking, tag management, and explicit sync-difference views.
 
 RepoFlow is currently under active development. The project is being tested incrementally before a stable release is published.
 
@@ -42,7 +42,13 @@ The application does **not** implement a separate version-control system. It ope
 - Detect binary files and show a safe metadata preview instead of decoding raw bytes.
 - Create commits from staged changes.
 - Create multiple local commits before pushing.
-- View commit history.
+- View commit history with commit metadata, changed paths, and full patch details, with an optional **All local branches** view for recovery/cherry-pick workflows.
+- Copy commit hashes and open GitHub commit pages directly from History.
+- Revert a non-merge commit by creating a new inverse commit; RepoFlow refuses to guess a mainline for merge commits.
+- Cherry-pick selected commits with conflict preservation and an explicit abort helper.
+- Inspect local-only vs upstream-only commits through **Sync Details…**.
+- Browse remote-tracking branches and create a local tracking branch explicitly.
+- Create annotated tags, push selected tags explicitly, and delete only local tags from RepoFlow.
 - Create and switch local branches.
 - Rename local branches and safely delete merged branches without force deletion.
 - Save, apply, and drop Git stashes from **Repository → Stashes…**.
@@ -127,6 +133,12 @@ Open **Repository → Stashes…** to temporarily save local work. RepoFlow can 
 ### Branch management
 
 Open **Repository → Manage Branches…** or use the branch button menu. Rename is local-only. Delete uses Git's safe `-d` mode so Git refuses to delete work that has not been merged.
+
+### History & recovery
+
+The **History** tab can inspect one commit at a time, including metadata, changed paths, and the patch. Recovery actions are intentionally non-destructive: **Revert Commit…** creates a new inverse commit, while **Cherry-pick Commit…** applies an existing commit to the current branch. If a cherry-pick/revert/merge is left in progress, RepoFlow exposes **Repository → Abort Current Git Operation…** instead of resetting history automatically.
+
+**Remote Branches…** creates an explicit local tracking branch from an already-fetched remote ref. **Tags…** creates annotated local tags; publishing a tag requires **Push Selected Tag**, and deleting a tag in RepoFlow deletes only the local tag.
 
 ## Safety Decisions
 

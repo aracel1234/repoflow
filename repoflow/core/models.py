@@ -105,6 +105,35 @@ class StashInfo:
 
 
 @dataclass(slots=True)
+class CommitDetail:
+    sha: str
+    short_sha: str
+    subject: str
+    body: str
+    author: str
+    author_email: str
+    authored_at: str
+    parent_count: int
+    files: list[str]
+    patch: str
+
+
+@dataclass(slots=True)
+class RemoteBranchInfo:
+    name: str
+    short_sha: str
+    subject: str
+
+
+@dataclass(slots=True)
+class TagInfo:
+    name: str
+    short_sha: str
+    relative_date: str
+    subject: str
+
+
+@dataclass(slots=True)
 class DiffHunk:
     header: str
     body: str

@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from repoflow.core.models import DiffHunk, GitHubRepository, GitHubUser, StashInfo
+from repoflow.core.models import CommitInfo, DiffHunk, GitHubRepository, GitHubUser, RemoteBranchInfo, StashInfo, TagInfo
 from repoflow.core.safety import SafetyIssue, SafetyScanner
 
 
@@ -816,3 +816,202 @@ class ConflictReviewDialog(QDialog):
         path = self._selected_path()
         if path and path.exists():
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+
+class RemoteBranchesDialog(QDialog):
+    def __init__(self, branches: list[RemoteBranchInfo], parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setWindowTitle("Remote Branches")
+        self.resize(720, 520)
+        self.action = ""
+
+        title = QLabel("Remote branches")
+        title.setObjectName("title")
+        note = QLabel(
+            "These are the remote-tracking refs currently known locally. Run Fetch before opening this dialog "
+            "to refresh them. Creating a tracking branch never deletes or rewrites an existing branch."
+        )
+        note.setObjectName("muted")
+        note.setWordWrap(True)
+
+        self.list = QListWidget()
+        for branch in branches:
+            item = QListWidgetItem(f"{branch.name}   {branch.short_sha}\n{branch.subject}")
+            item.setData(Qt.UserRole, branch.name)
+            self.list.addItem(item)
+        if branches:
+            self.list.setCurrentRow(0)
+
+        self.local_name = QLineEdit()
+        self.local_name.setPlaceholderText("Local branch name")
+        self.list.currentRowChanged.connect(self._selection_changed)
+        if branches:
+            self._selection_changed(0)
+
+        create = QPushButton("Create Tracking Branch")
+        create.setObjectName("primary")
+        create.clicked.connect(self._create)
+        close = QPushButton("Close")
+        close.clicked.connect(self.reject)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Local name"))
+        row.addWidget(self.local_name, 1)
+        row.addWidget(create)
+        row.addWidget(close)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(title)
+        layout.addWidget(note)
+        layout.addWidget(self.list, 1)
+        layout.addLayout(row)
+
+    def _selection_changed(self, _row: int) -> None:
+        name = self.selected_branch()
+        if name:
+            self.local_name.setText(name.split("/", 1)[1] if "/" in name else name)
+
+    def selected_branch(self) -> str | None:
+        item = self.list.currentItem()
+        value = item.data(Qt.UserRole) if item else None
+        return str(value) if value else None
+
+    def local_branch_name(self) -> str:
+        return self.local_name.text().strip()
+
+    def _create(self) -> None:
+        if self.selected_branch() and self.local_branch_name():
+            self.action = "track"
+            self.accept()
+
+
+class TagManagerDialog(QDialog):
+    def __init__(self, tags: list[TagInfo], parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setWindowTitle("Tags")
+        self.resize(720, 540)
+        self.action = ""
+
+        title = QLabel("Repository tags")
+        title.setObjectName("title")
+        note = QLabel(
+            "RepoFlow creates annotated local tags. Pushing a tag is a separate explicit action. "
+            "Deleting here removes only the local tag; RepoFlow never deletes a remote tag automatically."
+        )
+        note.setObjectName("muted")
+        note.setWordWrap(True)
+
+        self.name_edit = QLineEdit()
+        self.name_edit.setPlaceholderText("v1.0.0")
+        self.message_edit = QLineEdit()
+        self.message_edit.setPlaceholderText("Tag message (optional)")
+        create = QPushButton("Create Annotated Tag")
+        create.setObjectName("primary")
+        create.clicked.connect(lambda: self._choose("create"))
+
+        create_row = QHBoxLayout()
+        create_row.addWidget(self.name_edit, 1)
+        create_row.addWidget(self.message_edit, 2)
+        create_row.addWidget(create)
+
+        self.list = QListWidget()
+        for tag in tags:
+            item = QListWidgetItem(f"{tag.name}   {tag.short_sha}   {tag.relative_date}\n{tag.subject}")
+            item.setData(Qt.UserRole, tag.name)
+            self.list.addItem(item)
+        if tags:
+            self.list.setCurrentRow(0)
+
+        push = QPushButton("Push Selected Tag")
+        push.clicked.connect(lambda: self._choose("push"))
+        delete = QPushButton("Delete Local Tag")
+        delete.setObjectName("dangerAction")
+        delete.clicked.connect(lambda: self._choose("delete"))
+        close = QPushButton("Close")
+        close.clicked.connect(self.reject)
+
+        row = QHBoxLayout()
+        row.addWidget(push)
+        row.addWidget(delete)
+        row.addStretch(1)
+        row.addWidget(close)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(title)
+        layout.addWidget(note)
+        layout.addLayout(create_row)
+        layout.addWidget(self.list, 1)
+        layout.addLayout(row)
+
+    def selected_tag(self) -> str | None:
+        item = self.list.currentItem()
+        value = item.data(Qt.UserRole) if item else None
+        return str(value) if value else None
+
+    def new_tag(self) -> tuple[str, str]:
+        return self.name_edit.text().strip(), self.message_edit.text().strip()
+
+    def _choose(self, action: str) -> None:
+        if action == "create":
+            if not self.name_edit.text().strip():
+                return
+        elif not self.selected_tag():
+            return
+        self.action = action
+        self.accept()
+
+
+class SyncDetailsDialog(QDialog):
+    def __init__(
+        self,
+        upstream: str,
+        local_only: list[CommitInfo],
+        remote_only: list[CommitInfo],
+        parent: QWidget | None = None,
+    ):
+        super().__init__(parent)
+        self.setWindowTitle("Sync Details")
+        self.resize(900, 560)
+
+        title = QLabel(f"Branch difference against {upstream}")
+        title.setObjectName("title")
+        note = QLabel(
+            "Left: commits reachable from the current branch but not the upstream. "
+            "Right: commits reachable from the upstream but not the current branch."
+        )
+        note.setObjectName("muted")
+        note.setWordWrap(True)
+
+        left = QVBoxLayout()
+        left.addWidget(QLabel(f"Local only ({len(local_only)})"))
+        local_list = QListWidget()
+        for commit in local_only:
+            local_list.addItem(f"{commit.short_sha}   {commit.subject}\n{commit.author} • {commit.relative_date}")
+        if not local_only:
+            local_list.addItem("No local-only commits.")
+        left.addWidget(local_list, 1)
+
+        right = QVBoxLayout()
+        right.addWidget(QLabel(f"Upstream only ({len(remote_only)})"))
+        remote_list = QListWidget()
+        for commit in remote_only:
+            remote_list.addItem(f"{commit.short_sha}   {commit.subject}\n{commit.author} • {commit.relative_date}")
+        if not remote_only:
+            remote_list.addItem("No upstream-only commits.")
+        right.addWidget(remote_list, 1)
+
+        body = QHBoxLayout()
+        body.addLayout(left, 1)
+        body.addLayout(right, 1)
+
+        close = QPushButton("Close")
+        close.clicked.connect(self.accept)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(close)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(title)
+        layout.addWidget(note)
+        layout.addLayout(body, 1)
+        layout.addLayout(row)

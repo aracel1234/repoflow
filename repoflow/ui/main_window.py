@@ -7,6 +7,8 @@ from PySide6.QtCore import Qt, QSignalBlocker, QThreadPool, QTimer, QUrl
 from PySide6.QtGui import QAction, QDesktopServices, QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
+    QCheckBox,
     QDialog,
     QFileDialog,
     QFrame,
@@ -50,10 +52,13 @@ from repoflow.ui.dialogs import (
     GitHubTokenDialog,
     GitIgnoreDialog,
     HunkStageDialog,
+    RemoteBranchesDialog,
     RemoteDialog,
     RepositorySafetyDialog,
     SafetyWarningDialog,
     StashManagerDialog,
+    SyncDetailsDialog,
+    TagManagerDialog,
 )
 
 
@@ -84,6 +89,7 @@ class MainWindow(QMainWindow):
         self._safety_acknowledged_paths: set[str] = set()
         self._current_conflicts: list[GitFile] = []
         self._current_diverged = False
+        self._current_operation: str | None = None
         self._can_fetch = False
         self._can_pull = False
         self._can_push = False
@@ -297,8 +303,67 @@ class MainWindow(QMainWindow):
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        toolbar = QHBoxLayout()
+        self.sync_details_button = QPushButton("Sync Details…")
+        self.sync_details_button.clicked.connect(self.show_sync_details)
+        self.remote_branches_button = QPushButton("Remote Branches…")
+        self.remote_branches_button.clicked.connect(self.manage_remote_branches)
+        self.tags_button = QPushButton("Tags…")
+        self.tags_button.clicked.connect(self.manage_tags)
+        self.history_all_branches = QCheckBox("All local branches")
+        self.history_all_branches.setToolTip("Include commits reachable from every local branch. Useful when selecting a commit to cherry-pick.")
+        self.history_all_branches.toggled.connect(lambda _checked: self._populate_history())
+        toolbar.addWidget(self.sync_details_button)
+        toolbar.addWidget(self.remote_branches_button)
+        toolbar.addWidget(self.tags_button)
+        toolbar.addStretch(1)
+        toolbar.addWidget(self.history_all_branches)
+
+        splitter = QSplitter(Qt.Horizontal)
         self.history_list = QListWidget()
-        layout.addWidget(self.history_list)
+        self.history_list.currentItemChanged.connect(self._history_selected)
+
+        detail_panel = QWidget()
+        detail_layout = QVBoxLayout(detail_panel)
+        detail_layout.setContentsMargins(0, 0, 0, 0)
+        detail_layout.setSpacing(8)
+        self.history_title = QLabel("Select a commit to inspect it.")
+        self.history_title.setObjectName("title")
+        self.history_meta = QLabel("")
+        self.history_meta.setObjectName("muted")
+        self.history_meta.setWordWrap(True)
+        self.history_detail = QPlainTextEdit()
+        self.history_detail.setReadOnly(True)
+        self.history_detail.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self.history_detail.setObjectName("diffView")
+
+        history_actions = QHBoxLayout()
+        self.copy_hash_button = QPushButton("Copy Hash")
+        self.copy_hash_button.clicked.connect(self.copy_selected_commit_hash)
+        self.open_commit_button = QPushButton("Open on GitHub")
+        self.open_commit_button.clicked.connect(self.open_selected_commit_on_github)
+        self.revert_button = QPushButton("Revert Commit…")
+        self.revert_button.clicked.connect(self.revert_selected_commit)
+        self.cherry_pick_button = QPushButton("Cherry-pick Commit…")
+        self.cherry_pick_button.clicked.connect(self.cherry_pick_selected_commit)
+        for button in (self.copy_hash_button, self.open_commit_button, self.revert_button, self.cherry_pick_button):
+            button.setEnabled(False)
+            history_actions.addWidget(button)
+        history_actions.addStretch(1)
+
+        detail_layout.addWidget(self.history_title)
+        detail_layout.addWidget(self.history_meta)
+        detail_layout.addWidget(self.history_detail, 1)
+        detail_layout.addLayout(history_actions)
+        splitter.addWidget(self.history_list)
+        splitter.addWidget(detail_panel)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 2)
+
+        layout.addLayout(toolbar)
+        layout.addWidget(splitter, 1)
         return page
 
     def _build_menu(self) -> None:
@@ -319,9 +384,23 @@ class MainWindow(QMainWindow):
         stash_action.triggered.connect(self.manage_stashes)
         branch_manager_action = QAction("Manage Branches…", self)
         branch_manager_action.triggered.connect(self.manage_branches)
+        remote_branches_action = QAction("Remote Branches…", self)
+        remote_branches_action.triggered.connect(self.manage_remote_branches)
+        tags_action = QAction("Tags…", self)
+        tags_action.triggered.connect(self.manage_tags)
+        sync_details_action = QAction("Sync Details…", self)
+        sync_details_action.triggered.connect(self.show_sync_details)
+        self.abort_operation_action = QAction("Abort Current Git Operation…", self)
+        self.abort_operation_action.triggered.connect(self.abort_current_operation)
+        self.abort_operation_action.setEnabled(False)
         repo_menu.addAction(gitignore_action)
         repo_menu.addAction(stash_action)
         repo_menu.addAction(branch_manager_action)
+        repo_menu.addAction(remote_branches_action)
+        repo_menu.addAction(tags_action)
+        repo_menu.addAction(sync_details_action)
+        repo_menu.addSeparator()
+        repo_menu.addAction(self.abort_operation_action)
         repo_menu.addSeparator()
         quit_action = QAction("Quit", self)
         quit_action.triggered.connect(self.close)
@@ -631,8 +710,8 @@ class MainWindow(QMainWindow):
         if not self.git:
             self._error("Open a repository before managing stashes.")
             return
-        if self._current_conflicts:
-            self._error("Resolve merge conflicts before creating or applying stashes.")
+        if self._current_conflicts or self._current_operation:
+            self._error("Resolve or abort the current Git operation before creating or applying stashes.")
             return
         try:
             dialog = StashManagerDialog(self.git.stash_list(), self)
@@ -685,8 +764,8 @@ class MainWindow(QMainWindow):
         if not self.git:
             self._error("Open a repository before managing branches.")
             return
-        if self._current_conflicts:
-            self._error("Resolve merge conflicts before renaming or deleting branches.")
+        if self._current_conflicts or self._current_operation:
+            self._error("Resolve or abort the current Git operation before renaming or deleting branches.")
             return
         try:
             current = self.git.branch()
@@ -726,6 +805,119 @@ class MainWindow(QMainWindow):
         except GitError as exc:
             self._error(str(exc))
 
+    def manage_remote_branches(self) -> None:
+        if not self.git:
+            self._error("Open a repository before browsing remote branches.")
+            return
+        if self._current_conflicts or self._current_operation:
+            self._error("Resolve or abort the current Git operation before creating a tracking branch.")
+            return
+        try:
+            if self.git.status():
+                self._error("Create a tracking branch only from a clean working tree. Commit or stash local changes first.")
+                return
+            branches = self.git.remote_branches()
+            if not branches:
+                self._error("No remote branches are known locally. Connect a remote and run Fetch first.")
+                return
+            dialog = RemoteBranchesDialog(branches, self)
+            if dialog.exec() != QDialog.DialogCode.Accepted or dialog.action != "track":
+                return
+            remote_branch = dialog.selected_branch()
+            local_name = dialog.local_branch_name()
+            if not remote_branch:
+                return
+            self.git.create_tracking_branch(remote_branch, local_name)
+            self.refresh_all()
+            self.statusBar().showMessage(
+                f"Created local branch '{local_name}' tracking '{remote_branch}'.", 6000
+            )
+        except GitError as exc:
+            self._error(str(exc))
+
+    def manage_tags(self) -> None:
+        if not self.git:
+            self._error("Open a repository before managing tags.")
+            return
+        try:
+            dialog = TagManagerDialog(self.git.tags(), self)
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            if dialog.action == "create":
+                name, message = dialog.new_tag()
+                self.git.create_annotated_tag(name, message)
+                self.statusBar().showMessage(f"Created local tag '{name}'.", 5000)
+                return
+            tag = dialog.selected_tag()
+            if not tag:
+                return
+            if dialog.action == "delete":
+                answer = QMessageBox.warning(
+                    self,
+                    "Delete Local Tag",
+                    f"Delete local tag '{tag}'? RepoFlow will not delete any remote tag.",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No,
+                )
+                if answer != QMessageBox.Yes:
+                    return
+                self.git.delete_tag(tag)
+                self.statusBar().showMessage(f"Deleted local tag '{tag}'.", 5000)
+                return
+            if dialog.action == "push":
+                answer = QMessageBox.question(
+                    self,
+                    "Push Tag",
+                    f"Push tag '{tag}' to the configured remote? This publishes the tag explicitly.",
+                )
+                if answer != QMessageBox.Yes:
+                    return
+                token, username = self._github_auth()
+                self._run_background(
+                    lambda: self.git.push_tag(tag, token=token, username=username),
+                    on_success=lambda msg: self._network_done(str(msg), "Tag Push"),
+                    busy=f"Pushing tag {tag}…",
+                )
+        except GitError as exc:
+            self._error(str(exc))
+
+    def show_sync_details(self) -> None:
+        if not self.git:
+            self._error("Open a repository before viewing sync details.")
+            return
+        try:
+            info = self.git.repo_info()
+            if not info.upstream:
+                self._error("This branch does not have an upstream yet.")
+                return
+            local_only, remote_only = self.git.sync_commit_lists(100)
+            SyncDetailsDialog(info.upstream, local_only, remote_only, self).exec()
+        except GitError as exc:
+            self._error(str(exc))
+
+    def abort_current_operation(self) -> None:
+        if not self.git:
+            return
+        try:
+            state = self.git.operation_state()
+            if not state:
+                self._error("There is no merge, cherry-pick, or revert operation to abort.")
+                return
+            answer = QMessageBox.warning(
+                self,
+                "Abort Git Operation",
+                f"Abort the current {state} operation and return to the pre-operation state?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
+            message = self.git.abort_current_operation()
+            self.refresh_all()
+            self.statusBar().showMessage(message, 6000)
+        except GitError as exc:
+            self._error(str(exc))
+
     def _show_repository_safety(self) -> None:
         if not self.git:
             return
@@ -746,6 +938,21 @@ class MainWindow(QMainWindow):
                 "When no Conflict rows remain, create the appropriate commit and refresh."
             )
             ConflictReviewDialog(info.root, [entry.path for entry in self._current_conflicts], self).exec()
+            return
+
+        if self._current_operation:
+            body = (
+                f"A {self._current_operation} operation is currently in progress.\n\n"
+                "Resolve and stage any conflicted files, then create the appropriate commit to finish the operation, "
+                "or choose Repository → Abort Current Git Operation… to return to the pre-operation state. "
+                "RepoFlow blocks branch switching and remote sync while this state is active."
+            )
+            RepositorySafetyDialog(
+                "Git Operation in Progress",
+                f"Current operation: {self._current_operation}",
+                body,
+                self,
+            ).exec()
             return
 
         if self._current_diverged:
@@ -775,8 +982,10 @@ class MainWindow(QMainWindow):
             files = self.git.status()
             conflicts = [entry for entry in files if entry.conflicted]
             diverged = bool(info.upstream and info.ahead > 0 and info.behind > 0)
+            operation = self.git.operation_state()
             self._current_conflicts = conflicts
             self._current_diverged = diverged
+            self._current_operation = operation
 
             self.repo_title.setText(info.name)
             remote = info.remote_url or "Local only"
@@ -787,8 +996,8 @@ class MainWindow(QMainWindow):
             self.remote_button.setText("Remote ✓" if info.remote_url else "Connect Remote")
 
             self._can_fetch = bool(info.remote_name)
-            self._can_pull = bool(info.remote_name) and not conflicts and not diverged
-            self._can_push = bool(info.remote_name) and not conflicts and not diverged
+            self._can_pull = bool(info.remote_name) and not conflicts and not diverged and not operation
+            self._can_push = bool(info.remote_name) and not conflicts and not diverged and not operation
             self._apply_operation_button_state()
 
             if diverged:
@@ -800,10 +1009,18 @@ class MainWindow(QMainWindow):
             self.sync_label.setText(f"{len(files)} changed file(s)   •   {sync}   •   {upstream}")
 
             if conflicts:
+                operation_note = f" Current operation: {operation}." if operation else ""
                 self.safety_notice.setText(
-                    f"⚠ {len(conflicts)} unresolved conflict(s). Resolve and stage them before syncing."
+                    f"⚠ {len(conflicts)} unresolved conflict(s). Resolve and stage them before syncing.{operation_note}"
                 )
                 self.safety_button.setText("Review Conflicts")
+                self.safety_notice.show()
+                self.safety_button.show()
+            elif operation:
+                self.safety_notice.setText(
+                    f"⚠ A {operation} operation is in progress. Complete it before starting another history operation."
+                )
+                self.safety_button.setText("Review Safety")
                 self.safety_notice.show()
                 self.safety_button.show()
             elif diverged:
@@ -836,6 +1053,7 @@ class MainWindow(QMainWindow):
         self.safety_button.hide()
         self._current_conflicts = []
         self._current_diverged = False
+        self._current_operation = None
         self._can_fetch = self._can_pull = self._can_push = False
         self._hunk_available = False
         self.hunk_button.setEnabled(False)
@@ -1158,6 +1376,9 @@ class MainWindow(QMainWindow):
         if self._current_conflicts:
             self._error("Resolve all merge conflicts before pulling.")
             return
+        if self._current_operation:
+            self._error(f"Finish or abort the current {self._current_operation} operation before pulling.")
+            return
         if self._current_diverged:
             self._show_repository_safety()
             return
@@ -1174,6 +1395,9 @@ class MainWindow(QMainWindow):
             return
         if self._current_conflicts:
             self._error("Resolve all merge conflicts before pushing.")
+            return
+        if self._current_operation:
+            self._error(f"Finish or abort the current {self._current_operation} operation before pushing.")
             return
         if self._current_diverged:
             self._show_repository_safety()
@@ -1295,13 +1519,142 @@ class MainWindow(QMainWindow):
     def _populate_history(self) -> None:
         if not self.git:
             return
+        selected_sha = self._selected_history_sha()
         self.history_list.clear()
-        for commit in self.git.history(120):
+        selected_item = None
+        for commit in self.git.history(120, all_local_branches=self.history_all_branches.isChecked()):
             item = QListWidgetItem(f"{commit.short_sha}   {commit.subject}\n{commit.author} • {commit.relative_date}")
             item.setToolTip(commit.sha)
+            item.setData(Qt.UserRole, commit.sha)
             self.history_list.addItem(item)
+            if selected_sha == commit.sha:
+                selected_item = item
         if self.history_list.count() == 0:
-            self.history_list.addItem("No commits yet.")
+            empty = QListWidgetItem("No commits yet.")
+            empty.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.history_list.addItem(empty)
+            self._history_selected(None, None)
+        elif selected_item:
+            self.history_list.setCurrentItem(selected_item)
+        else:
+            self.history_list.setCurrentRow(0)
+
+    def _selected_history_sha(self) -> str | None:
+        item = self.history_list.currentItem() if hasattr(self, "history_list") else None
+        value = item.data(Qt.UserRole) if item else None
+        return str(value) if value else None
+
+    def _history_selected(self, current: QListWidgetItem | None, _previous: QListWidgetItem | None) -> None:
+        sha = current.data(Qt.UserRole) if current else None
+        available = bool(sha and self.git)
+        if not available:
+            self.history_title.setText("Select a commit to inspect it.")
+            self.history_meta.clear()
+            self.history_detail.clear()
+            for button in (self.copy_hash_button, self.open_commit_button, self.revert_button, self.cherry_pick_button):
+                button.setEnabled(False)
+            return
+        try:
+            detail = self.git.commit_detail(str(sha))
+            self.history_title.setText(f"{detail.short_sha}  {detail.subject}")
+            body_note = f"\n\n{detail.body}" if detail.body else ""
+            self.history_meta.setText(
+                f"{detail.author} <{detail.author_email}> • {detail.authored_at} • {len(detail.files)} changed path(s){body_note}"
+            )
+            files = "\n".join(detail.files) if detail.files else "(no changed paths reported)"
+            self.history_detail.setPlainText(f"CHANGED PATHS\n{'─' * 72}\n{files}\n\n{detail.patch}")
+            self.copy_hash_button.setEnabled(True)
+            info = self.git.repo_info()
+            self.open_commit_button.setEnabled(bool(info.remote_url and GitService.is_github_url(info.remote_url)))
+            history_safe = not self._is_busy and not self._current_conflicts and not self._current_diverged and not self._current_operation
+            self.revert_button.setEnabled(history_safe and detail.parent_count <= 1)
+            self.cherry_pick_button.setEnabled(history_safe)
+            if detail.parent_count > 1:
+                self.revert_button.setToolTip("Merge commits require an explicit mainline choice; RepoFlow does not guess it.")
+            else:
+                self.revert_button.setToolTip("")
+        except GitError as exc:
+            self.history_detail.setPlainText(str(exc))
+            self.revert_button.setEnabled(False)
+            self.cherry_pick_button.setEnabled(False)
+
+    def copy_selected_commit_hash(self) -> None:
+        sha = self._selected_history_sha()
+        if not sha:
+            return
+        QApplication.clipboard().setText(sha)
+        self.statusBar().showMessage(f"Copied commit {sha[:12]} to clipboard.", 4000)
+
+    def open_selected_commit_on_github(self) -> None:
+        if not self.git:
+            return
+        sha = self._selected_history_sha()
+        if not sha:
+            return
+        url = self.git.remote_url("origin")
+        if not url or not GitService.is_github_url(url):
+            self._error("Open Commit on GitHub requires a GitHub origin remote.")
+            return
+        QDesktopServices.openUrl(QUrl(f"{self._remote_to_web_url(url)}/commit/{sha}"))
+
+    def revert_selected_commit(self) -> None:
+        if not self.git:
+            return
+        sha = self._selected_history_sha()
+        if not sha:
+            return
+        try:
+            detail = self.git.commit_detail(sha)
+            if detail.parent_count > 1:
+                self._error("RepoFlow does not guess the mainline parent for merge-commit reverts.")
+                return
+            answer = QMessageBox.warning(
+                self,
+                "Revert Commit",
+                f"Create a new commit that reverses {detail.short_sha} ({detail.subject})?\n\n"
+                "This preserves history and does not reset or rewrite existing commits.",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
+            try:
+                message = self.git.revert_commit(sha)
+            except GitError:
+                self.refresh_all()
+                raise
+            self.refresh_all()
+            self.statusBar().showMessage(message.splitlines()[0] if message else "Revert commit created.", 6000)
+        except GitError as exc:
+            self._error(str(exc))
+
+    def cherry_pick_selected_commit(self) -> None:
+        if not self.git:
+            return
+        sha = self._selected_history_sha()
+        if not sha:
+            return
+        try:
+            detail = self.git.commit_detail(sha)
+            answer = QMessageBox.question(
+                self,
+                "Cherry-pick Commit",
+                f"Apply commit {detail.short_sha} ({detail.subject}) onto the current branch?\n\n"
+                "RepoFlow will not resolve conflicts automatically.",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
+            try:
+                message = self.git.cherry_pick_commit(sha)
+            except GitError:
+                self.refresh_all()
+                raise
+            self.refresh_all()
+            self.statusBar().showMessage(message.splitlines()[0] if message else "Cherry-pick completed.", 6000)
+        except GitError as exc:
+            self._error(str(exc))
 
     def _tab_changed(self, index: int) -> None:
         if index == 1:
@@ -1342,13 +1695,24 @@ class MainWindow(QMainWindow):
         self.fetch_button.setEnabled(available and self._can_fetch)
         self.pull_button.setEnabled(available and self._can_pull)
         self.push_button.setEnabled(available and self._can_push)
-        self.branch_button.setEnabled(available and not self._current_conflicts)
+        self.branch_button.setEnabled(available and not self._current_conflicts and not self._current_operation)
         self.remote_button.setEnabled(available)
         self.commit_button.setEnabled(available)
         self.commit_push_button.setEnabled(
-            available and not self._current_conflicts and not self._current_diverged
+            available and not self._current_conflicts and not self._current_diverged and not self._current_operation
         )
-        self.hunk_button.setEnabled(available and self._hunk_available)
+        self.hunk_button.setEnabled(available and self._hunk_available and not self._current_operation)
+        if hasattr(self, "abort_operation_action"):
+            self.abort_operation_action.setEnabled(available and bool(self._current_operation))
+        history_safe = available and not self._current_conflicts and not self._current_diverged and not self._current_operation
+        if hasattr(self, "revert_button"):
+            selected = bool(self._selected_history_sha())
+            self.revert_button.setEnabled(history_safe and selected)
+            self.cherry_pick_button.setEnabled(history_safe and selected)
+        if hasattr(self, "sync_details_button"):
+            self.sync_details_button.setEnabled(available)
+            self.remote_branches_button.setEnabled(available and not self._current_conflicts and not self._current_operation)
+            self.tags_button.setEnabled(available)
 
     def _set_busy(self, busy: bool, message: str | None) -> None:
         self._is_busy = busy

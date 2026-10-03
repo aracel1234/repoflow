@@ -137,3 +137,17 @@ After T01-T19 pass, continue with:
 - **T70 — Rename local branch:** open **Manage Branches…**, rename a disposable local branch, and verify the branch list/header update without creating a second branch.
 - **T71 — Safe branch deletion:** delete a fully merged disposable branch successfully, then try deleting a branch containing an unmerged commit. Git/RepoFlow must refuse the unmerged deletion; no force-delete path is provided.
 - **T72 — Conflict review regression:** create a disposable conflict as in T62, open **Review Conflicts**, verify the conflicted file and markers are visible, and confirm RepoFlow does not automatically choose ours/theirs. Resolve manually, stage, and commit as before.
+
+
+## v0.3.2 Stage 3 Batch 3 smoke tests
+
+- **T73 — Commit detail:** open History, select a commit, and verify metadata, changed paths, and patch render correctly. Copy Hash must copy the full SHA; Open on GitHub must open the selected commit when origin is GitHub.
+- **T74 — Revert commit:** on a clean disposable branch, select a normal non-merge commit and choose **Revert Commit…**. RepoFlow must create a new inverse commit without rewriting prior history. A merge commit must be refused because no mainline parent is guessed.
+- **T75 — Cherry-pick clean:** create a commit on another disposable branch, return to the target branch, enable **All local branches** in History, select that commit, and cherry-pick it. The commit must be applied without resetting/rebasing history.
+- **T76 — Cherry-pick conflict + abort:** create a deliberate cherry-pick conflict. RepoFlow must preserve the conflicted state, block sync/branch operations, expose **Abort Current Git Operation…**, and restore the pre-cherry-pick state after abort.
+- **T77 — Remote branch browser:** push a disposable remote branch from another clone, Fetch in RepoFlow, open **Remote Branches…**, and verify the remote-tracking ref appears.
+- **T78 — Create tracking branch:** from T77, create a new local tracking branch. Verify the active branch changes and its upstream is the selected remote branch.
+- **T79 — Tag create:** open **Tags…**, create an annotated disposable tag, reopen the manager, and verify it appears locally.
+- **T80 — Tag push:** select the disposable tag and choose **Push Selected Tag**. Verify the tag appears on the remote/GitHub only after the explicit push action.
+- **T81 — Local tag delete safety:** delete the local tag in RepoFlow after it has been pushed. The local tag must disappear while the remote tag remains; RepoFlow provides no remote-tag delete action.
+- **T82 — Sync details + restart regression:** create one local-only and one upstream-only commit, Fetch, and verify **Sync Details…** separates them correctly. Restart RepoFlow and confirm GitHub persistence, repository state, History, safety guards, and all v0.3.1 workflows still operate normally.
